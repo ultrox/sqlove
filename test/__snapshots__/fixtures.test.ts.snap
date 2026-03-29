@@ -12,6 +12,10 @@ import { SqlClient } from "@effect/sql/SqlClient";
 
 // ---- Enums ----
 
+/** Postgres enum \`order_status\` */
+export const OrderStatus = Schema.Literal("pending", "confirmed", "shipped", "delivered", "cancelled");
+export type OrderStatus = typeof OrderStatus.Type;
+
 /** Postgres enum \`user_role\` */
 export const UserRole = Schema.Literal("admin", "member", "guest");
 export type UserRole = typeof UserRole.Type;
@@ -56,6 +60,78 @@ export const arrayColumn: Effect.Effect<
   SqlClient
 > = SqlClient.pipe(Effect.flatMap((sql) =>
   sql<ArrayColumnRow>\`SELECT id, title, tags FROM todo\`
+));
+
+/** Rows returned by {@link categoryTree}.
+ *  @see \`/sql/category_tree.sql\` */
+export class CategoryTreeRow extends Schema.Class<CategoryTreeRow>("CategoryTreeRow")({
+  id: Schema.Number,
+  name: Schema.String,
+  depth: Schema.Number,
+  parentId: Schema.propertySignature(Schema.Number).pipe(Schema.fromKey("parent_id")),
+  productCount: Schema.propertySignature(Schema.Number).pipe(Schema.fromKey("product_count")),
+}) {}
+
+/**
+ * Recursive category tree with product count.
+ * @see \`/sql/category_tree.sql\`
+ */
+export const categoryTree: Effect.Effect<
+  ReadonlyArray<CategoryTreeRow>,
+  SqlError,
+  SqlClient
+> = SqlClient.pipe(Effect.flatMap((sql) =>
+  sql<CategoryTreeRow>\`WITH RECURSIVE cat_tree AS (
+  SELECT id, name, parent_id, 0 AS depth
+  FROM categories
+  WHERE parent_id IS NULL
+
+  UNION ALL
+
+  SELECT c.id, c.name, c.parent_id, ct.depth + 1
+  FROM categories c
+  JOIN cat_tree ct ON ct.id = c.parent_id
+)
+SELECT
+  ct.id,
+  ct.name,
+  ct.depth,
+  ct.parent_id,
+  count(p.id)::int AS product_count
+FROM cat_tree ct
+LEFT JOIN products p ON p.category_id = ct.id
+GROUP BY ct.id, ct.name, ct.depth, ct.parent_id
+ORDER BY ct.depth, ct.name\`
+));
+
+/** Rows returned by {@link cteRanked}.
+ *  @see \`/sql/cte_ranked.sql\` */
+export class CteRankedRow extends Schema.Class<CteRankedRow>("CteRankedRow")({
+  name: Schema.String,
+  email: Schema.String,
+  totalSpent: Schema.propertySignature(Schema.String).pipe(Schema.fromKey("total_spent")),
+  rank: Schema.Number,
+}) {}
+
+/**
+ * Users ranked by total spend using a CTE.
+ * @see \`/sql/cte_ranked.sql\`
+ */
+export const cteRanked: Effect.Effect<
+  ReadonlyArray<CteRankedRow>,
+  SqlError,
+  SqlClient
+> = SqlClient.pipe(Effect.flatMap((sql) =>
+  sql<CteRankedRow>\`WITH user_spend AS (
+  SELECT user_id, sum(total)::numeric(10,2) AS total_spent
+  FROM orders
+  WHERE status != 'cancelled'
+  GROUP BY user_id
+)
+SELECT u.name, u.email, us.total_spent,
+       rank() OVER (ORDER BY us.total_spent DESC)::int AS rank
+FROM users u
+JOIN user_spend us ON us.user_id = u.id\`
 ));
 
 /**
@@ -436,6 +512,66 @@ LEFT JOIN (
 ) combined ON combined.user_id = u.id\`
 ));
 
+/** Rows returned by {@link jsonbQuery}.
+ *  @see \`/sql/jsonb_query.sql\` */
+export class JsonbQueryRow extends Schema.Class<JsonbQueryRow>("JsonbQueryRow")({
+  id: Schema.Number,
+  name: Schema.String,
+  department: Schema.String,
+  level: Schema.String,
+  salary: Schema.String,
+}) {}
+
+/**
+ * Query JSONB metadata field.
+ * @see \`/sql/jsonb_query.sql\`
+ */
+export const jsonbQuery = (
+  params: {
+    readonly arg1: unknown;
+  }
+): Effect.Effect<ReadonlyArray<JsonbQueryRow>, SqlError, SqlClient> =>
+  SqlClient.pipe(Effect.flatMap((sql) =>
+    sql<JsonbQueryRow>\`SELECT
+  id,
+  name,
+  metadata->>'department' AS department,
+  metadata->>'level' AS level,
+  (metadata->>'salary')::numeric AS salary
+FROM users
+WHERE metadata @> \${params.arg1}::jsonb\`
+  ));
+
+/** Rows returned by {@link lateralRecentOrders}.
+ *  @see \`/sql/lateral_recent_orders.sql\` */
+export class LateralRecentOrdersRow extends Schema.Class<LateralRecentOrdersRow>("LateralRecentOrdersRow")({
+  name: Schema.String,
+  orderId: Schema.propertySignature(Schema.NullOr(Schema.Number)).pipe(Schema.fromKey("order_id")),
+  total: Schema.NullOr(Schema.String),
+  status: Schema.NullOr(OrderStatus),
+}) {}
+
+/**
+ * Each user with their 3 most recent orders (LATERAL).
+ * @see \`/sql/lateral_recent_orders.sql\`
+ */
+export const lateralRecentOrders: Effect.Effect<
+  ReadonlyArray<LateralRecentOrdersRow>,
+  SqlError,
+  SqlClient
+> = SqlClient.pipe(Effect.flatMap((sql) =>
+  sql<LateralRecentOrdersRow>\`SELECT u.name, recent.id AS order_id, recent.total, recent.status
+FROM users u
+LEFT JOIN LATERAL (
+  SELECT id, total, status
+  FROM orders
+  WHERE user_id = u.id
+  ORDER BY created_at DESC
+  LIMIT 3
+) recent ON true
+WHERE u.active = true\`
+));
+
 /** Rows returned by {@link leftJoin}.
  *  @see \`/sql/left_join.sql\` */
 export class LeftJoinRow extends Schema.Class<LeftJoinRow>("LeftJoinRow")({
@@ -484,6 +620,37 @@ LEFT JOIN orders o ON o.user_id = u.id
 WHERE u.id = \${params.id}\`
   ));
 
+/** Rows returned by {@link multiEnum}.
+ *  @see \`/sql/multi_enum.sql\` */
+export class MultiEnumRow extends Schema.Class<MultiEnumRow>("MultiEnumRow")({
+  name: Schema.String,
+  role: UserRole,
+  orderId: Schema.propertySignature(Schema.Number).pipe(Schema.fromKey("order_id")),
+  status: OrderStatus,
+}) {}
+
+/**
+ * Query using multiple enum types.
+ * @see \`/sql/multi_enum.sql\`
+ */
+export const multiEnum = (
+  params: {
+    readonly role: UserRole;
+    readonly status: OrderStatus;
+  }
+): Effect.Effect<ReadonlyArray<MultiEnumRow>, SqlError, SqlClient> =>
+  SqlClient.pipe(Effect.flatMap((sql) =>
+    sql<MultiEnumRow>\`SELECT
+  u.name,
+  u.role,
+  o.id AS order_id,
+  o.status
+FROM users u
+JOIN orders o ON o.user_id = u.id
+WHERE u.role = \${params.role}::user_role
+  AND o.status = \${params.status}::order_status\`
+  ));
+
 /** Rows returned by {@link nullableColumns}.
  *  @see \`/sql/nullable_columns.sql\` */
 export class NullableColumnsRow extends Schema.Class<NullableColumnsRow>("NullableColumnsRow")({
@@ -503,6 +670,125 @@ export const nullableColumns = (
 ): Effect.Effect<ReadonlyArray<NullableColumnsRow>, SqlError, SqlClient> =>
   SqlClient.pipe(Effect.flatMap((sql) =>
     sql<NullableColumnsRow>\`SELECT name, bio, age FROM users WHERE id = \${params.id}\`
+  ));
+
+/** Rows returned by {@link orderDetails}.
+ *  @see \`/sql/order_details.sql\` */
+export class OrderDetailsRow extends Schema.Class<OrderDetailsRow>("OrderDetailsRow")({
+  orderId: Schema.propertySignature(Schema.Number).pipe(Schema.fromKey("order_id")),
+  status: OrderStatus,
+  customer: Schema.String,
+  product: Schema.String,
+  quantity: Schema.Number,
+  unitPrice: Schema.propertySignature(Schema.String).pipe(Schema.fromKey("unit_price")),
+  lineTotal: Schema.propertySignature(Schema.String).pipe(Schema.fromKey("line_total")),
+  paymentMethod: Schema.propertySignature(Schema.NullOr(Schema.String)).pipe(Schema.fromKey("payment_method")),
+  paidAt: Schema.propertySignature(Schema.NullOr(Schema.DateFromString)).pipe(Schema.fromKey("paid_at")),
+}) {}
+
+/**
+ * Full order details: user, items, products, payment.
+ * @see \`/sql/order_details.sql\`
+ */
+export const orderDetails = (
+  params: {
+    readonly id: number;
+  }
+): Effect.Effect<ReadonlyArray<OrderDetailsRow>, SqlError, SqlClient> =>
+  SqlClient.pipe(Effect.flatMap((sql) =>
+    sql<OrderDetailsRow>\`SELECT
+  o.id AS order_id,
+  o.status,
+  u.name AS customer,
+  p.name AS product,
+  li.quantity,
+  li.unit_price,
+  (li.quantity * li.unit_price)::numeric(10,2) AS line_total,
+  pay.method AS payment_method,
+  pay.paid_at
+FROM orders o
+JOIN users u ON u.id = o.user_id
+JOIN line_items li ON li.order_id = o.id
+JOIN products p ON p.id = li.product_id
+LEFT JOIN payments pay ON pay.order_id = o.id
+WHERE o.id = \${params.id}\`
+  ));
+
+/** Rows returned by {@link productStats}.
+ *  @see \`/sql/product_stats.sql\` */
+export class ProductStatsRow extends Schema.Class<ProductStatsRow>("ProductStatsRow")({
+  id: Schema.Number,
+  name: Schema.String,
+  sku: Schema.String,
+  avgRating: Schema.propertySignature(Schema.String).pipe(Schema.fromKey("avg_rating")),
+  totalSold: Schema.propertySignature(Schema.Number).pipe(Schema.fromKey("total_sold")),
+  revenue: Schema.String,
+  reviewCount: Schema.propertySignature(Schema.Number).pipe(Schema.fromKey("review_count")),
+}) {}
+
+/**
+ * Product stats: avg rating, total sold, revenue.
+ * @see \`/sql/product_stats.sql\`
+ */
+export const productStats: Effect.Effect<
+  ReadonlyArray<ProductStatsRow>,
+  SqlError,
+  SqlClient
+> = SqlClient.pipe(Effect.flatMap((sql) =>
+  sql<ProductStatsRow>\`SELECT
+  p.id,
+  p.name,
+  p.sku,
+  coalesce(avg(r.rating), 0)::numeric(3,1) AS avg_rating,
+  coalesce(sum(li.quantity), 0)::int AS total_sold,
+  coalesce(sum(li.quantity * li.unit_price), 0)::numeric(10,2) AS revenue,
+  count(DISTINCT r.id)::int AS review_count
+FROM products p
+LEFT JOIN line_items li ON li.product_id = p.id
+LEFT JOIN reviews r ON r.product_id = p.id
+GROUP BY p.id
+ORDER BY revenue DESC\`
+));
+
+/** Rows returned by {@link refundReport}.
+ *  @see \`/sql/refund_report.sql\` */
+export class RefundReportRow extends Schema.Class<RefundReportRow>("RefundReportRow")({
+  refundId: Schema.propertySignature(Schema.Number).pipe(Schema.fromKey("refund_id")),
+  refundAmount: Schema.propertySignature(Schema.String).pipe(Schema.fromKey("refund_amount")),
+  reason: Schema.NullOr(Schema.String),
+  refundedAt: Schema.propertySignature(Schema.DateFromString).pipe(Schema.fromKey("refunded_at")),
+  orderId: Schema.propertySignature(Schema.Number).pipe(Schema.fromKey("order_id")),
+  orderStatus: Schema.propertySignature(OrderStatus).pipe(Schema.fromKey("order_status")),
+  customer: Schema.String,
+  paymentMethod: Schema.propertySignature(Schema.String).pipe(Schema.fromKey("payment_method")),
+}) {}
+
+/**
+ * Refund report with order and payment details.
+ * @see \`/sql/refund_report.sql\`
+ */
+export const refundReport = (
+  params: {
+    readonly refundedAt: Date;
+    readonly refundedAt: Date;
+  }
+): Effect.Effect<ReadonlyArray<RefundReportRow>, SqlError, SqlClient> =>
+  SqlClient.pipe(Effect.flatMap((sql) =>
+    sql<RefundReportRow>\`SELECT
+  r.id AS refund_id,
+  r.amount AS refund_amount,
+  r.reason,
+  r.refunded_at,
+  o.id AS order_id,
+  o.status AS order_status,
+  u.name AS customer,
+  p.method AS payment_method
+FROM refunds r
+JOIN payments p ON p.id = r.payment_id
+JOIN orders o ON o.id = r.order_id
+JOIN users u ON u.id = o.user_id
+WHERE r.refunded_at >= \${params.refundedAt} AND r.refunded_at < \${params.refundedAt}
+ORDER BY r.refunded_at DESC\`
   ));
 
 /** Rows returned by {@link rightJoin}.
@@ -526,6 +812,44 @@ FROM users
 RIGHT JOIN orders ON orders.user_id = users.id\`
 ));
 
+/** Rows returned by {@link searchProducts}.
+ *  @see \`/sql/search_products.sql\` */
+export class SearchProductsRow extends Schema.Class<SearchProductsRow>("SearchProductsRow")({
+  id: Schema.Number,
+  name: Schema.String,
+  price: Schema.String,
+  inStock: Schema.propertySignature(Schema.Boolean).pipe(Schema.fromKey("in_stock")),
+  category: Schema.String,
+  avgRating: Schema.propertySignature(Schema.String).pipe(Schema.fromKey("avg_rating")),
+}) {}
+
+/**
+ * Full text search on products with category and rating.
+ * @see \`/sql/search_products.sql\`
+ */
+export const searchProducts = (
+  params: {
+    readonly name: string;
+    readonly id: number;
+  }
+): Effect.Effect<ReadonlyArray<SearchProductsRow>, SqlError, SqlClient> =>
+  SqlClient.pipe(Effect.flatMap((sql) =>
+    sql<SearchProductsRow>\`SELECT
+  p.id,
+  p.name,
+  p.price,
+  p.in_stock,
+  c.name AS category,
+  coalesce(avg(r.rating), 0)::numeric(3,1) AS avg_rating
+FROM products p
+LEFT JOIN categories c ON c.id = p.category_id
+LEFT JOIN reviews r ON r.product_id = p.id
+WHERE p.name ILIKE \${params.name}
+  AND (\${params.id}::int IS NULL OR c.id = \${params.id})
+GROUP BY p.id, c.name
+ORDER BY p.name\`
+  ));
+
 /** Rows returned by {@link simpleSelect}.
  *  @see \`/sql/simple_select.sql\` */
 export class SimpleSelectRow extends Schema.Class<SimpleSelectRow>("SimpleSelectRow")({
@@ -544,6 +868,106 @@ export const simpleSelect: Effect.Effect<
   SqlClient
 > = SqlClient.pipe(Effect.flatMap((sql) =>
   sql<SimpleSelectRow>\`SELECT id, name, email FROM users ORDER BY name\`
+));
+
+/** Rows returned by {@link upsertReview}.
+ *  @see \`/sql/upsert_review.sql\` */
+export class UpsertReviewRow extends Schema.Class<UpsertReviewRow>("UpsertReviewRow")({
+  id: Schema.Number,
+  rating: Schema.Number,
+  createdAt: Schema.propertySignature(Schema.DateFromString).pipe(Schema.fromKey("created_at")),
+}) {}
+
+/**
+ * Upsert a review — insert or update on conflict.
+ * @see \`/sql/upsert_review.sql\`
+ */
+export const upsertReview = (
+  params: {
+    readonly userId: number;
+    readonly productId: number;
+    readonly rating: number;
+    readonly body: string | null;
+  }
+): Effect.Effect<ReadonlyArray<UpsertReviewRow>, SqlError, SqlClient> =>
+  SqlClient.pipe(Effect.flatMap((sql) =>
+    sql<UpsertReviewRow>\`INSERT INTO reviews (user_id, product_id, rating, body)
+VALUES (\${params.userId}, \${params.productId}, \${params.rating}, \${params.body})
+ON CONFLICT (user_id, product_id)
+DO UPDATE SET rating = \${params.rating}, body = \${params.body}
+RETURNING id, rating, created_at\`
+  ));
+
+/** Rows returned by {@link userDashboard}.
+ *  @see \`/sql/user_dashboard.sql\` */
+export class UserDashboardRow extends Schema.Class<UserDashboardRow>("UserDashboardRow")({
+  id: Schema.Number,
+  name: Schema.String,
+  email: Schema.String,
+  role: UserRole,
+  tags: Schema.Array(Schema.String),
+  orderCount: Schema.propertySignature(Schema.Number).pipe(Schema.fromKey("order_count")),
+  totalSpent: Schema.propertySignature(Schema.String).pipe(Schema.fromKey("total_spent")),
+  lastOrderAt: Schema.propertySignature(Schema.DateFromString).pipe(Schema.fromKey("last_order_at")),
+}) {}
+
+/**
+ * User dashboard: profile, order count, total spent, latest order.
+ * @see \`/sql/user_dashboard.sql\`
+ */
+export const userDashboard = (
+  params: {
+    readonly id: number;
+  }
+): Effect.Effect<ReadonlyArray<UserDashboardRow>, SqlError, SqlClient> =>
+  SqlClient.pipe(Effect.flatMap((sql) =>
+    sql<UserDashboardRow>\`SELECT
+  u.id,
+  u.name,
+  u.email,
+  u.role,
+  u.tags,
+  count(o.id)::int AS order_count,
+  coalesce(sum(o.total), 0)::numeric(10,2) AS total_spent,
+  max(o.created_at) AS last_order_at
+FROM users u
+LEFT JOIN orders o ON o.user_id = u.id AND o.status != 'cancelled'
+WHERE u.id = \${params.id}
+GROUP BY u.id\`
+  ));
+
+/** Rows returned by {@link windowRunningTotal}.
+ *  @see \`/sql/window_running_total.sql\` */
+export class WindowRunningTotalRow extends Schema.Class<WindowRunningTotalRow>("WindowRunningTotalRow")({
+  id: Schema.Number,
+  name: Schema.String,
+  total: Schema.String,
+  createdAt: Schema.propertySignature(Schema.DateFromString).pipe(Schema.fromKey("created_at")),
+  runningTotal: Schema.propertySignature(Schema.String).pipe(Schema.fromKey("running_total")),
+}) {}
+
+/**
+ * Running total of orders per user using window function.
+ * @see \`/sql/window_running_total.sql\`
+ */
+export const windowRunningTotal: Effect.Effect<
+  ReadonlyArray<WindowRunningTotalRow>,
+  SqlError,
+  SqlClient
+> = SqlClient.pipe(Effect.flatMap((sql) =>
+  sql<WindowRunningTotalRow>\`SELECT
+  o.id,
+  u.name,
+  o.total,
+  o.created_at,
+  sum(o.total) OVER (
+    PARTITION BY o.user_id
+    ORDER BY o.created_at
+  )::numeric(10,2) AS running_total
+FROM orders o
+JOIN users u ON u.id = o.user_id
+WHERE o.status != 'cancelled'
+ORDER BY u.name, o.created_at\`
 ));
 
 /** Rows returned by {@link withParams}.
