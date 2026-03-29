@@ -15,7 +15,12 @@ import {
  */
 export const createAndMaybeComplete = (title: string, priority: TodoPriority) =>
   Effect.gen(function* () {
-    const [todo] = yield* createTodo({ title, description: "", priority });
+    const [todo] = yield* createTodo({
+      title,
+      description: "",
+      priority,
+      shareWith: null,
+    });
     yield* Effect.log(`Created: "${todo.title}" [${todo.priority}]`);
 
     if (priority === "urgent") {
@@ -86,6 +91,7 @@ export const seed = Effect.gen(function* () {
       title: item.title,
       description: item.desc,
       priority: item.priority,
+      shareWith: null,
     });
   }
 
