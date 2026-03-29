@@ -107,6 +107,12 @@ describe("join nullability edge cases", () => {
     expect(cols["total"]!.nullable).toBe(true);     // orders — inside LEFT JOIN parens
   });
 
+  it("LEFT JOIN with WHERE param: plan collapses but nullability still works", async () => {
+    const cols = await describeColumns("left_join_with_param");
+    expect(cols["name"]!.nullable).toBe(false);   // users — left side
+    expect(cols["total"]!.nullable).toBe(true);    // orders — RIGHT side of LEFT JOIN, NOT NULL in table
+  });
+
   it("EXISTS subquery: inner LEFT JOIN does not affect outer columns", async () => {
     const cols = await describeColumns("join_exists_subquery");
     expect(cols["name"]!.nullable).toBe(false);  // users.name — NOT NULL, no outer join

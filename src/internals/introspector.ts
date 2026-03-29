@@ -113,6 +113,7 @@ async function resolveNullability(
   columns: RawColumnDesc[],
   sql: string,
   paramCount: number,
+  paramOIDs: number[],
 ): Promise<boolean[]> {
   const nullable = new Array<boolean>(columns.length).fill(false);
   const tableCols = columns
@@ -141,7 +142,7 @@ async function resolveNullability(
 
   // Outer join nullability: columns from the nullable side
   // of LEFT/RIGHT/FULL JOINs are always nullable
-  const joinNullability = await resolveJoinNullability(client, columns, sql, paramCount);
+  const joinNullability = await resolveJoinNullability(client, columns, sql, paramCount, paramOIDs);
   for (let i = 0; i < columns.length; i++) {
     if (joinNullability.has(i)) {
       nullable[i] = true;
@@ -160,71 +161,123 @@ async function resolveNullability(
  *
  *   PREPARE → EXPLAIN (VERBOSE, FORMAT JSON) EXECUTE → walk plan tree
  */
+/** Step 1: get the query plan from Postgres via PREPARE + EXPLAIN.
+ *  Tries NULL args first. If the plan collapses (One-Time Filter),
+ *  retries with typed dummy values derived from param OIDs. */
+async function getQueryPlan(
+  client: pg.Client,
+  sql: string,
+  paramCount: number,
+  paramOIDs: number[],
+): Promise<any | null> {
+  const probeName = `_sqlove_explain_${Date.now()}`;
+  try {
+    await client.query(`PREPARE ${probeName} AS ${sql}`);
+
+    // Try NULL first — works unless WHERE collapses the plan
+    let plan = await executeExplain(client, probeName, paramCount, null);
+
+    // Collapsed plan: no join info. Retry with typed dummy values.
+    if (plan && isCollapsedPlan(plan) && paramCount > 0) {
+      plan = await executeExplain(client, probeName, paramCount, paramOIDs);
+    }
+
+    return plan;
+  } catch {
+    return null;
+  } finally {
+    await client.query(`DEALLOCATE ${probeName}`).catch(() => {});
+  }
+}
+
+async function executeExplain(
+  client: pg.Client,
+  probeName: string,
+  paramCount: number,
+  paramOIDs: number[] | null,
+): Promise<any | null> {
+  let dummyArgs = "";
+  if (paramCount > 0) {
+    if (paramOIDs) {
+      // Use typed dummy values that won't collapse the plan
+      const vals = paramOIDs.map((oid) => dummyValueForOid(oid));
+      dummyArgs = `(${vals.join(",")})`;
+    } else {
+      dummyArgs = `(${Array(paramCount).fill("NULL").join(",")})`;
+    }
+  }
+  const { rows } = await client.query(
+    `EXPLAIN (VERBOSE, FORMAT JSON) EXECUTE ${probeName}${dummyArgs}`,
+  );
+  return (rows[0] as any)?.["QUERY PLAN"]?.[0]?.Plan ?? null;
+}
+
+/** Detect a plan that collapsed due to NULL params (e.g., WHERE id = NULL → false) */
+function isCollapsedPlan(plan: any): boolean {
+  // Collapsed plans have "One-Time Filter": "false" or just a Result node with no joins
+  if (plan["One-Time Filter"] === "false") return true;
+  if (plan["Node Type"] === "Result" && !plan.Plans) return true;
+  return false;
+}
+
+/** Return a dummy literal value for a given Postgres OID that won't cause type errors.
+ *  These are never actually inserted — only used for EXPLAIN plan generation. */
+function dummyValueForOid(oid: number): string {
+  switch (oid) {
+    case 16: return "'f'";           // bool
+    case 17: return "'\\x00'";       // bytea
+    case 20: case 21: case 23:       // int8, int2, int4
+    case 26:                         // oid
+    case 700: case 701:              // float4, float8
+      return "0";
+    case 1700: return "'0'";         // numeric
+    case 2950: return "'00000000-0000-0000-0000-000000000000'"; // uuid
+    case 1082: return "'2000-01-01'";        // date
+    case 1083: case 1266: return "'00:00'";  // time, timetz
+    case 1114: case 1184: return "'2000-01-01'"; // timestamp, timestamptz
+    default: return "''";            // text, varchar, and everything else
+  }
+}
+
+/**
+ * Step 2: pure function — walk the plan tree, return which
+ * column indices are on the nullable side of outer joins.
+ */
+function nullableIndicesFromPlan(
+  plan: any,
+  columns: RawColumnDesc[],
+): Set<number> {
+  const result = new Set<number>();
+
+  const nullableAliases = new Set<string>();
+  collectNullableAliases(plan, nullableAliases);
+  if (nullableAliases.size === 0) return result;
+
+  const output: string[] = plan.Output ?? [];
+  for (let i = 0; i < output.length && i < columns.length; i++) {
+    const alias = extractAliasFromOutput(output[i]!);
+    if (alias && nullableAliases.has(alias)) {
+      result.add(i);
+    }
+  }
+
+  return result;
+}
+
+/** Combine both steps. */
 async function resolveJoinNullability(
   client: pg.Client,
   columns: RawColumnDesc[],
   sql: string,
   paramCount: number,
+  paramOIDs: number[],
 ): Promise<Set<number>> {
-  const nullableIndices = new Set<number>();
-
-  try {
-    const probeName = `_sqlove_explain`;
-    await client.query(`PREPARE ${probeName} AS ${sql}`);
-
-    const dummyArgs = paramCount > 0
-      ? `(${Array(paramCount).fill("1").join(",")})`
-      : "";
-    const { rows } = await client.query(
-      `EXPLAIN (VERBOSE, FORMAT JSON) EXECUTE ${probeName}${dummyArgs}`,
-    );
-
-    const plan = (rows[0] as any)?.["QUERY PLAN"]?.[0]?.Plan;
-    if (plan) {
-      // Collect aliases on the nullable side of joins
-      const nullableAliases = new Set<string>();
-      collectNullableAliases(plan, nullableAliases);
-
-      if (nullableAliases.size > 0) {
-        // The plan's Output is ["alias.col", "alias.col", ...]
-        // matching the order of our result columns
-        const output: string[] = plan.Output ?? [];
-        for (let i = 0; i < output.length && i < columns.length; i++) {
-          const alias = extractAliasFromOutput(output[i]!);
-          if (alias && nullableAliases.has(alias)) {
-            nullableIndices.add(i);
-          }
-        }
-
-        // Also check by table OID for columns that DO have one
-        const nullableOids = new Set<number>();
-        collectNullableOids(plan, nullableAliases, nullableOids, client);
-
-        // Batch resolve: get OIDs for all nullable aliases
-        const aliasNames = [...nullableAliases];
-        if (aliasNames.length > 0) {
-          const { rows: pgRows } = await client.query<{ oid: number; relname: string }>(
-            `SELECT oid::int, relname FROM pg_class WHERE relname = ANY($1)`,
-            [aliasNames],
-          );
-          for (const r of pgRows) nullableOids.add(r.oid);
-        }
-
-        for (let i = 0; i < columns.length; i++) {
-          if (columns[i]!.tableOID !== 0 && nullableOids.has(columns[i]!.tableOID)) {
-            nullableIndices.add(i);
-          }
-        }
-      }
-    }
-
-    await client.query(`DEALLOCATE ${probeName}`);
-  } catch {
-    // EXPLAIN can fail (e.g., mutations). Column-level nullability still applies.
-  }
-
-  return nullableIndices;
+  const plan = await getQueryPlan(client, sql, paramCount, paramOIDs);
+  if (!plan) return new Set();
+  return nullableIndicesFromPlan(plan, columns);
 }
+
+// ── Plan tree walkers (pure, no DB) ──────────────────────
 
 /**
  * Walk plan tree. At join nodes, collect aliases from the nullable side.
@@ -232,10 +285,7 @@ async function resolveJoinNullability(
  *   Right → Outer child aliases are nullable
  *   Full  → both sides' aliases are nullable
  */
-function collectNullableAliases(
-  node: any,
-  result: Set<string>,
-): void {
+function collectNullableAliases(node: any, result: Set<string>): void {
   const joinType: string | undefined = node["Join Type"];
   const plans: any[] = node.Plans ?? [];
 
@@ -254,7 +304,6 @@ function collectNullableAliases(
   }
 }
 
-/** Collect all Alias values from a subtree. */
 function collectAllAliases(node: any, result: Set<string>): void {
   if (node.Alias) result.add(node.Alias);
   for (const child of node.Plans ?? []) {
@@ -264,12 +313,11 @@ function collectAllAliases(node: any, result: Set<string>): void {
 
 /**
  * Extract alias prefix from an EXPLAIN Output entry.
- *   "u.name"              → "u"
+ *   "u.name"                → "u"
  *   "\"*SELECT* 1\".amount" → "*SELECT* 1"
- *   "(expression)"        → null
+ *   "(expression)"          → null
  */
 function extractAliasFromOutput(ref: string): string | null {
-  // Quoted alias: "\"something\".column"
   if (ref.startsWith('"')) {
     const closeQuote = ref.indexOf('"', 1);
     if (closeQuote > 1 && ref[closeQuote + 1] === ".") {
@@ -277,20 +325,9 @@ function extractAliasFromOutput(ref: string): string | null {
     }
     return null;
   }
-  // Simple alias: "u.name"
   const dotIdx = ref.indexOf(".");
   if (dotIdx > 0) return ref.slice(0, dotIdx);
   return null;
-}
-
-/** Collect table OIDs that match nullable aliases (unused, keeping for OID-based fallback). */
-function collectNullableOids(
-  _plan: any,
-  _nullableAliases: Set<string>,
-  _result: Set<number>,
-  _client: pg.Client,
-): void {
-  // OID resolution now happens in the caller via pg_class lookup
 }
 
 // ── Param nullability for INSERT/SET ─────────────────────────────────────────
@@ -384,7 +421,7 @@ export async function introspect(
       await resolver.prefetch(allOids);
 
       const nullable = await resolveNullability(
-        client, raw.columns, pq.file.content, pq.paramCount,
+        client, raw.columns, pq.file.content, pq.paramCount, raw.paramOIDs,
       );
 
       // Resolve param nullability for INSERT/SET params

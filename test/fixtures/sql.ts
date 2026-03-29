@@ -92,8 +92,8 @@ export const enumColumn = (
 /** Rows returned by {@link fullJoin}.
  *  @see `/sql/full_join.sql` */
 export class FullJoinRow extends Schema.Class<FullJoinRow>("FullJoinRow")({
-  name: Schema.String,
-  total: Schema.String,
+  name: Schema.NullOr(Schema.String),
+  total: Schema.NullOr(Schema.String),
 }) {}
 
 /**
@@ -180,9 +180,9 @@ RETURNING id, name, created_at`
  *  @see `/sql/join_chain.sql` */
 export class JoinChainRow extends Schema.Class<JoinChainRow>("JoinChainRow")({
   name: Schema.String,
-  total: Schema.String,
-  quantity: Schema.Number,
-  sku: Schema.String,
+  total: Schema.NullOr(Schema.String),
+  quantity: Schema.NullOr(Schema.Number),
+  sku: Schema.NullOr(Schema.String),
 }) {}
 
 /**
@@ -226,7 +226,7 @@ JOIN orders o ON o.user_id = u.id`
  *  @see `/sql/join_cte.sql` */
 export class JoinCteRow extends Schema.Class<JoinCteRow>("JoinCteRow")({
   name: Schema.String,
-  total: Schema.String,
+  total: Schema.NullOr(Schema.String),
 }) {}
 
 /**
@@ -274,7 +274,7 @@ WHERE EXISTS (
  *  @see `/sql/join_lateral.sql` */
 export class JoinLateralRow extends Schema.Class<JoinLateralRow>("JoinLateralRow")({
   name: Schema.String,
-  total: Schema.String,
+  total: Schema.NullOr(Schema.String),
 }) {}
 
 /**
@@ -322,7 +322,7 @@ LEFT JOIN tags t ON t.id = 1`
  *  @see `/sql/join_nested_parens.sql` */
 export class JoinNestedParensRow extends Schema.Class<JoinNestedParensRow>("JoinNestedParensRow")({
   name: Schema.String,
-  total: Schema.String,
+  total: Schema.NullOr(Schema.String),
 }) {}
 
 /**
@@ -345,7 +345,7 @@ LEFT JOIN (orders o JOIN line_items li ON li.order_id = o.id)
  *  @see `/sql/join_same_table_twice.sql` */
 export class JoinSameTableTwiceRow extends Schema.Class<JoinSameTableTwiceRow>("JoinSameTableTwiceRow")({
   name: Schema.String,
-  managerName: Schema.propertySignature(Schema.String).pipe(Schema.fromKey("manager_name")),
+  managerName: Schema.propertySignature(Schema.NullOr(Schema.String)).pipe(Schema.fromKey("manager_name")),
   total: Schema.String,
 }) {}
 
@@ -369,7 +369,7 @@ JOIN orders o ON o.user_id = u.id`
  *  @see `/sql/join_schema_qualified.sql` */
 export class JoinSchemaQualifiedRow extends Schema.Class<JoinSchemaQualifiedRow>("JoinSchemaQualifiedRow")({
   name: Schema.String,
-  total: Schema.String,
+  total: Schema.NullOr(Schema.String),
 }) {}
 
 /**
@@ -390,7 +390,7 @@ LEFT JOIN public.orders o ON o.user_id = u.id`
  *  @see `/sql/join_subquery.sql` */
 export class JoinSubqueryRow extends Schema.Class<JoinSubqueryRow>("JoinSubqueryRow")({
   name: Schema.String,
-  total: Schema.String,
+  total: Schema.NullOr(Schema.String),
 }) {}
 
 /**
@@ -412,7 +412,7 @@ LEFT JOIN (SELECT user_id, sum(total)::numeric(10,2) AS total FROM orders GROUP 
  *  @see `/sql/join_union_subquery.sql` */
 export class JoinUnionSubqueryRow extends Schema.Class<JoinUnionSubqueryRow>("JoinUnionSubqueryRow")({
   name: Schema.String,
-  amount: Schema.String,
+  amount: Schema.NullOr(Schema.String),
 }) {}
 
 /**
@@ -437,7 +437,7 @@ LEFT JOIN (
  *  @see `/sql/left_join.sql` */
 export class LeftJoinRow extends Schema.Class<LeftJoinRow>("LeftJoinRow")({
   name: Schema.String,
-  total: Schema.String,
+  total: Schema.NullOr(Schema.String),
   notes: Schema.NullOr(Schema.String),
 }) {}
 
@@ -455,6 +455,30 @@ export const leftJoin = (
 FROM users
 LEFT JOIN orders ON orders.user_id = users.id
 WHERE users.id = ${params.id}`
+  ));
+
+/** Rows returned by {@link leftJoinWithParam}.
+ *  @see `/sql/left_join_with_param.sql` */
+export class LeftJoinWithParamRow extends Schema.Class<LeftJoinWithParamRow>("LeftJoinWithParamRow")({
+  name: Schema.String,
+  total: Schema.NullOr(Schema.String),
+}) {}
+
+/**
+ * LEFT JOIN where the NOT NULL right side column must be nullable.
+ * The WHERE clause uses a param which collapses the plan with NULL.
+ * @see `/sql/left_join_with_param.sql`
+ */
+export const leftJoinWithParam = (
+  params: {
+    readonly id: number;
+  }
+): Effect.Effect<ReadonlyArray<LeftJoinWithParamRow>, SqlError, SqlClient> =>
+  SqlClient.pipe(Effect.flatMap((sql) =>
+    sql<LeftJoinWithParamRow>`SELECT u.name, o.total
+FROM users u
+LEFT JOIN orders o ON o.user_id = u.id
+WHERE u.id = ${params.id}`
   ));
 
 /** Rows returned by {@link nullableColumns}.
@@ -481,7 +505,7 @@ export const nullableColumns = (
 /** Rows returned by {@link rightJoin}.
  *  @see `/sql/right_join.sql` */
 export class RightJoinRow extends Schema.Class<RightJoinRow>("RightJoinRow")({
-  name: Schema.String,
+  name: Schema.NullOr(Schema.String),
   total: Schema.String,
 }) {}
 
