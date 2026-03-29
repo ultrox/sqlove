@@ -6,13 +6,13 @@
  * sqlove check     → check(), exit 1 if stale
  * sqlove --src X   → override source directory
  *
- * Parses argv manually. No framework,
- * we hate dependencies, my god we meaning me :).
+ * Parses argv manually. No framework.
  */
 
 import { resolve } from "node:path";
 import { Effect } from "effect";
 import { run, check, formatError } from "./main.js";
+import type { SqloveError } from "./main.js";
 
 const VERSION = "0.1.0";
 const DIM = "\x1b[2m";
@@ -45,6 +45,13 @@ Connection:
   Set DATABASE_URL or PGHOST/PGPORT/PGUSER/PGDATABASE/PGPASSWORD.
 `.trim();
 
+/** Format a SqloveError and exit. */
+const die = (err: SqloveError): Effect.Effect<never> =>
+  Effect.sync(() => {
+    console.error(formatError(err));
+    process.exit(1);
+  });
+
 async function main() {
   const args = process.argv.slice(2);
 
@@ -66,79 +73,81 @@ async function main() {
 
   // ── Check mode ──────────────────────────────────────────────
   if (args.includes("check")) {
-    try {
-      const { ok, stale, errors } = await Effect.runPromise(check(resolvedSrc));
-      for (const err of errors) console.error(formatError(err));
-      if (ok) {
-        console.log(`${GREEN}✓${RESET} All generated files are up-to-date.`);
-        process.exit(0);
-      } else {
-        console.error(`${RED}✗${RESET} The following files are out of date:`);
-        for (const f of stale) console.error(`  - ${f}`);
-        console.error(`\nRun ${DIM}sqlove${RESET} to regenerate.`);
-        process.exit(1);
-      }
-    } catch (err: any) {
-      console.error(`Error: ${err.message}`);
-      process.exit(1);
-    }
+    const program = check(resolvedSrc).pipe(
+      Effect.flatMap(({ ok, stale, errors }) =>
+        Effect.sync(() => {
+          for (const err of errors) console.error(formatError(err));
+          if (ok) {
+            console.log(`${GREEN}✓${RESET} All generated files are up-to-date.`);
+            process.exit(0);
+          } else {
+            console.error(`${RED}✗${RESET} The following files are out of date:`);
+            for (const f of stale) console.error(`  - ${f}`);
+            console.error(`\nRun ${DIM}sqlove${RESET} to regenerate.`);
+            process.exit(1);
+          }
+        }),
+      ),
+      Effect.catchAll(die),
+    );
+    await Effect.runPromise(program);
+    return;
   }
 
   // ── Generate mode ───────────────────────────────────────────
   console.log(`🐿️ sqlove v${VERSION}\n`);
 
-  try {
-    const result = await Effect.runPromise(run(resolvedSrc));
+  const program = run(resolvedSrc).pipe(
+    Effect.flatMap((result) =>
+      Effect.sync(() => {
+        if (result.modules.length === 0 && result.errors.length === 0) {
+          console.log(`No sql/ directories found under ${srcDir}.`);
+          process.exit(0);
+        }
 
-    if (result.modules.length === 0 && result.errors.length === 0) {
-      console.log(`No sql/ directories found under ${srcDir}.`);
-      process.exit(0);
-    }
+        for (const mod of result.modules) {
+          for (const q of mod.queries) {
+            console.log(
+              `  ${GREEN}✓${RESET} ${q.file.modulePath}/sql/${q.file.queryName}.sql`,
+            );
+          }
+        }
 
-    // Print per-query results
-    for (const mod of result.modules) {
-      for (const q of mod.queries) {
-        console.log(
-          `  ${GREEN}✓${RESET} ${q.file.modulePath}/sql/${q.file.queryName}.sql`,
+        for (const err of result.errors) {
+          console.error(formatError(err));
+        }
+
+        const totalQueries = result.modules.reduce(
+          (s, m) => s + m.queries.length,
+          0,
         );
-      }
-    }
+        const moduleCount = result.modules.length;
+        console.log("");
 
-    // Print errors
-    for (const err of result.errors) {
-      console.error(formatError(err));
-    }
+        if (result.written.length > 0) {
+          console.log(
+            `Generated ${moduleCount} module(s) (${totalQueries} queries)` +
+              (result.errors.length > 0
+                ? ` with ${result.errors.length} error(s)`
+                : "") +
+              `.`,
+          );
+          for (const f of result.written) {
+            console.log(`  → ${f}`);
+          }
+        } else if (totalQueries > 0) {
+          console.log(
+            `${totalQueries} queries up-to-date across ${moduleCount} module(s).`,
+          );
+        }
 
-    // Summary
-    const totalQueries = result.modules.reduce(
-      (s, m) => s + m.queries.length,
-      0,
-    );
-    const moduleCount = result.modules.length;
-    console.log("");
+        if (result.errors.length > 0) process.exit(1);
+      }),
+    ),
+    Effect.catchAll(die),
+  );
 
-    if (result.written.length > 0) {
-      console.log(
-        `Generated ${moduleCount} module(s) (${totalQueries} queries)` +
-          (result.errors.length > 0
-            ? ` with ${result.errors.length} error(s)`
-            : "") +
-          `.`,
-      );
-      for (const f of result.written) {
-        console.log(`  → ${f}`);
-      }
-    } else if (totalQueries > 0) {
-      console.log(
-        `${totalQueries} queries up-to-date across ${moduleCount} module(s).`,
-      );
-    }
-
-    if (result.errors.length > 0) process.exit(1);
-  } catch (err: any) {
-    console.error(`Error: ${err.message}`);
-    process.exit(1);
-  }
+  await Effect.runPromise(program);
 }
 
 main();

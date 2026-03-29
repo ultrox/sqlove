@@ -38,17 +38,8 @@ export const run = (
   Effect.gen(function* () {
     const { modules, errors } = yield* buildModules(srcDir);
 
-    const written: string[] = [];
-
-    for (const sqlTsContent of modules) {
-      const result = yield* writeIfChanged(sqlTsContent).pipe(
-        Effect.catchAll((writeErr: WriteErr) => {
-          errors.push(writeErr);
-          return Effect.succeed(null);
-        }),
-      );
-      if (result !== null) written.push(result);
-    }
+    const results = yield* Effect.forEach(modules, writeIfChanged);
+    const written = results.filter((p): p is string => p !== null);
 
     return { modules, written, errors };
   });
