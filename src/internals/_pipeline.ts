@@ -41,8 +41,13 @@ export const run = (
     const written: string[] = [];
 
     for (const sqlTsContent of modules) {
-      const path = yield* writeIfChanged(sqlTsContent);
-      if (path !== null) written.push(path);
+      const result = yield* writeIfChanged(sqlTsContent).pipe(
+        Effect.catchAll((writeErr: WriteErr) => {
+          errors.push(writeErr);
+          return Effect.succeed(null);
+        }),
+      );
+      if (result !== null) written.push(result);
     }
 
     return { modules, written, errors };
