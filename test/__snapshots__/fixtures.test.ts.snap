@@ -714,6 +714,122 @@ LEFT JOIN payments pay ON pay.order_id = o.id
 WHERE o.id = \${params.id}\`
   ));
 
+/** Rows returned by {@link overrideAggregateNullable}.
+ *  @see \`/sql/override_aggregate_nullable.sql\` */
+export class OverrideAggregateNullableRow extends Schema.Class<OverrideAggregateNullableRow>("OverrideAggregateNullableRow")({
+  name: Schema.String,
+  lastOrder: Schema.propertySignature(Schema.NullOr(Schema.DateFromString)).pipe(Schema.fromKey("last_order")),
+}) {}
+
+/**
+ * max() on LEFT JOIN can return null. Use ? suffix.
+ * @see \`/sql/override_aggregate_nullable.sql\`
+ */
+export const overrideAggregateNullable: Effect.Effect<
+  ReadonlyArray<OverrideAggregateNullableRow>,
+  SqlError,
+  SqlClient
+> = SqlClient.pipe(Effect.flatMap((sql) =>
+  sql<OverrideAggregateNullableRow>\`SELECT u.name, max(o.created_at) AS "last_order?"
+FROM users u
+LEFT JOIN orders o ON o.user_id = u.id
+GROUP BY u.id\`
+));
+
+/** Rows returned by {@link overrideCteNullable}.
+ *  @see \`/sql/override_cte_nullable.sql\` */
+export class OverrideCteNullableRow extends Schema.Class<OverrideCteNullableRow>("OverrideCteNullableRow")({
+  id: Schema.Number,
+  parentId: Schema.propertySignature(Schema.NullOr(Schema.Number)).pipe(Schema.fromKey("parent_id")),
+}) {}
+
+/**
+ * CTE loses table metadata. Use ? suffix for nullable columns.
+ * @see \`/sql/override_cte_nullable.sql\`
+ */
+export const overrideCteNullable: Effect.Effect<
+  ReadonlyArray<OverrideCteNullableRow>,
+  SqlError,
+  SqlClient
+> = SqlClient.pipe(Effect.flatMap((sql) =>
+  sql<OverrideCteNullableRow>\`WITH cats AS (
+  SELECT id, parent_id FROM categories
+)
+SELECT id, parent_id AS "parent_id?" FROM cats\`
+));
+
+/** Rows returned by {@link overrideForceNotNull}.
+ *  @see \`/sql/override_force_not_null.sql\` */
+export class OverrideForceNotNullRow extends Schema.Class<OverrideForceNotNullRow>("OverrideForceNotNullRow")({
+  bio: Schema.String,
+  age: Schema.Number,
+}) {}
+
+/**
+ * Force non-null with ! suffix on a nullable column.
+ * @see \`/sql/override_force_not_null.sql\`
+ */
+export const overrideForceNotNull = (
+  params: {
+    readonly id: number;
+  }
+): Effect.Effect<ReadonlyArray<OverrideForceNotNullRow>, SqlError, SqlClient> =>
+  SqlClient.pipe(Effect.flatMap((sql) =>
+    sql<OverrideForceNotNullRow>\`SELECT bio AS "bio!", age AS "age!"
+FROM users
+WHERE id = \${params.id}\`
+  ));
+
+/** Rows returned by {@link overrideForceNullable}.
+ *  @see \`/sql/override_force_nullable.sql\` */
+export class OverrideForceNullableRow extends Schema.Class<OverrideForceNullableRow>("OverrideForceNullableRow")({
+  name: Schema.String,
+  lastOrderAt: Schema.propertySignature(Schema.NullOr(Schema.DateFromString)).pipe(Schema.fromKey("last_order_at")),
+}) {}
+
+/**
+ * Force nullable with ? suffix on a NOT NULL column.
+ * @see \`/sql/override_force_nullable.sql\`
+ */
+export const overrideForceNullable: Effect.Effect<
+  ReadonlyArray<OverrideForceNullableRow>,
+  SqlError,
+  SqlClient
+> = SqlClient.pipe(Effect.flatMap((sql) =>
+  sql<OverrideForceNullableRow>\`SELECT
+  u.name,
+  max(o.created_at) AS "last_order_at?"
+FROM users u
+LEFT JOIN orders o ON o.user_id = u.id
+GROUP BY u.id\`
+));
+
+/** Rows returned by {@link overrideJsonbNullable}.
+ *  @see \`/sql/override_jsonb_nullable.sql\` */
+export class OverrideJsonbNullableRow extends Schema.Class<OverrideJsonbNullableRow>("OverrideJsonbNullableRow")({
+  id: Schema.Number,
+  department: Schema.NullOr(Schema.String),
+  level: Schema.NullOr(Schema.String),
+}) {}
+
+/**
+ * jsonb ->> might not have the key. Use ? suffix.
+ * @see \`/sql/override_jsonb_nullable.sql\`
+ */
+export const overrideJsonbNullable = (
+  params: {
+    readonly id: number;
+  }
+): Effect.Effect<ReadonlyArray<OverrideJsonbNullableRow>, SqlError, SqlClient> =>
+  SqlClient.pipe(Effect.flatMap((sql) =>
+    sql<OverrideJsonbNullableRow>\`SELECT
+  id,
+  metadata->>'department' AS "department?",
+  metadata->>'level' AS "level?"
+FROM users
+WHERE id = \${params.id}\`
+  ));
+
 /** Rows returned by {@link productStats}.
  *  @see \`/sql/product_stats.sql\` */
 export class ProductStatsRow extends Schema.Class<ProductStatsRow>("ProductStatsRow")({
@@ -868,52 +984,6 @@ export const simpleSelect: Effect.Effect<
   SqlClient
 > = SqlClient.pipe(Effect.flatMap((sql) =>
   sql<SimpleSelectRow>\`SELECT id, name, email FROM users ORDER BY name\`
-));
-
-/** Rows returned by {@link suffixNotNull}.
- *  @see \`/sql/suffix_not_null.sql\` */
-export class SuffixNotNullRow extends Schema.Class<SuffixNotNullRow>("SuffixNotNullRow")({
-  bio: Schema.String,
-  age: Schema.Number,
-}) {}
-
-/**
- * Force non-null with ! suffix on a nullable column.
- * @see \`/sql/suffix_not_null.sql\`
- */
-export const suffixNotNull = (
-  params: {
-    readonly id: number;
-  }
-): Effect.Effect<ReadonlyArray<SuffixNotNullRow>, SqlError, SqlClient> =>
-  SqlClient.pipe(Effect.flatMap((sql) =>
-    sql<SuffixNotNullRow>\`SELECT bio AS "bio!", age AS "age!"
-FROM users
-WHERE id = \${params.id}\`
-  ));
-
-/** Rows returned by {@link suffixNullable}.
- *  @see \`/sql/suffix_nullable.sql\` */
-export class SuffixNullableRow extends Schema.Class<SuffixNullableRow>("SuffixNullableRow")({
-  name: Schema.String,
-  lastOrderAt: Schema.propertySignature(Schema.NullOr(Schema.DateFromString)).pipe(Schema.fromKey("last_order_at")),
-}) {}
-
-/**
- * Force nullable with ? suffix on a NOT NULL column.
- * @see \`/sql/suffix_nullable.sql\`
- */
-export const suffixNullable: Effect.Effect<
-  ReadonlyArray<SuffixNullableRow>,
-  SqlError,
-  SqlClient
-> = SqlClient.pipe(Effect.flatMap((sql) =>
-  sql<SuffixNullableRow>\`SELECT
-  u.name,
-  max(o.created_at) AS "last_order_at?"
-FROM users u
-LEFT JOIN orders o ON o.user_id = u.id
-GROUP BY u.id\`
 ));
 
 /** Rows returned by {@link upsertReview}.

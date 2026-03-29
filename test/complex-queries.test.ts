@@ -112,7 +112,7 @@ describe("complex queries — correctness", () => {
       expect(cols["role"]!.tsType.enumDef).toBeDefined();
     });
 
-    it("max() on LEFT JOIN forced nullable with ? suffix", async () => {
+    it("max() on LEFT JOIN uses ? suffix", async () => {
       const { cols } = await describe_("user_dashboard");
       expect(cols["last_order_at"]!.nullable).toBe(true);
     });
@@ -127,7 +127,7 @@ describe("complex queries — correctness", () => {
   // ── category_tree ──────────────────────────────────────
 
   describe("category_tree (recursive CTE)", () => {
-    it("CTE column forced nullable with ? suffix", async () => {
+    it("CTE column uses ? suffix", async () => {
       const { cols } = await describe_("category_tree");
       expect(cols["parent_id"]!.nullable).toBe(true);
     });
@@ -194,7 +194,7 @@ describe("complex queries — correctness", () => {
   // ── jsonb_query ────────────────────────────────────────
 
   describe("jsonb_query", () => {
-    it("jsonb ->> forced nullable with ? suffix", async () => {
+    it("jsonb ->> uses ? suffix", async () => {
       const { cols } = await describe_("jsonb_query");
       expect(cols["department"]!.nullable).toBe(true);
       expect(cols["level"]!.nullable).toBe(true);
@@ -296,20 +296,33 @@ describe("complex queries — correctness", () => {
 
   describe("nullability suffixes", () => {
     it("? forces column to nullable", async () => {
-      const { cols } = await describe_("suffix_nullable");
+      const { cols } = await describe_("override_force_nullable");
       expect(cols["last_order_at"]!.nullable).toBe(true);
-      // suffix stripped from name
       expect(cols["last_order_at?"]).toBeUndefined();
     });
 
     it("! forces column to non-null", async () => {
-      const { cols } = await describe_("suffix_not_null");
-      // bio and age are nullable in the table, but ! overrides
+      const { cols } = await describe_("override_force_not_null");
       expect(cols["bio"]!.nullable).toBe(false);
       expect(cols["age"]!.nullable).toBe(false);
-      // suffixes stripped
       expect(cols["bio!"]).toBeUndefined();
       expect(cols["age!"]).toBeUndefined();
+    });
+
+    it("? on aggregate over LEFT JOIN", async () => {
+      const { cols } = await describe_("override_aggregate_nullable");
+      expect(cols["last_order"]!.nullable).toBe(true);
+    });
+
+    it("? on CTE column", async () => {
+      const { cols } = await describe_("override_cte_nullable");
+      expect(cols["parent_id"]!.nullable).toBe(true);
+    });
+
+    it("? on jsonb ->> extraction", async () => {
+      const { cols } = await describe_("override_jsonb_nullable");
+      expect(cols["department"]!.nullable).toBe(true);
+      expect(cols["level"]!.nullable).toBe(true);
     });
   });
 });
