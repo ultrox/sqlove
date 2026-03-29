@@ -11,6 +11,7 @@
  */
 
 import { resolve } from "node:path";
+import { Effect } from "effect";
 import { run, check, formatError } from "./main.js";
 
 const VERSION = "0.1.0";
@@ -66,7 +67,7 @@ async function main() {
   // ── Check mode ──────────────────────────────────────────────
   if (args.includes("check")) {
     try {
-      const { ok, stale, errors } = await check(resolvedSrc);
+      const { ok, stale, errors } = await Effect.runPromise(check(resolvedSrc));
       for (const err of errors) console.error(formatError(err));
       if (ok) {
         console.log(`${GREEN}✓${RESET} All generated files are up-to-date.`);
@@ -87,7 +88,7 @@ async function main() {
   console.log(`🐿️ sqlove v${VERSION}\n`);
 
   try {
-    const result = await run(resolvedSrc);
+    const result = await Effect.runPromise(run(resolvedSrc));
 
     if (result.modules.length === 0 && result.errors.length === 0) {
       console.log(`No sql/ directories found under ${srcDir}.`);

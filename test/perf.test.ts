@@ -3,6 +3,7 @@ import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import pg from "pg";
+import { Effect } from "effect";
 import { run } from "../src/internals/_pipeline.js";
 import { discover } from "../src/internals/discovery.js";
 import { parse } from "../src/internals/parser.js";
@@ -118,7 +119,7 @@ describe("performance", () => {
   });
 
   it("full pipeline: 50 queries end-to-end in < 3000ms", async () => {
-    const { result, ms } = await timeAsync(() => run(join(TMP, "src")));
+    const { result, ms } = await timeAsync(() => Effect.runPromise(run(join(TMP, "src"))));
     const queryCount = result.modules.reduce((s, m) => s + m.queries.length, 0);
     console.log(`    pipeline: ${ms.toFixed(1)}ms for ${queryCount} queries`);
     expect(ms).toBeLessThan(3000);
@@ -127,7 +128,7 @@ describe("performance", () => {
 
   it("idempotent re-run is faster (no write)", async () => {
     // First run already happened above, files exist
-    const { result, ms } = await timeAsync(() => run(join(TMP, "src")));
+    const { result, ms } = await timeAsync(() => Effect.runPromise(run(join(TMP, "src"))));
     console.log(`    re-run: ${ms.toFixed(1)}ms (no writes)`);
     expect(result.written).toHaveLength(0);
     // Re-run should still be under budget

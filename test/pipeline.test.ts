@@ -3,6 +3,7 @@ import { mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import pg from "pg";
+import { Effect } from "effect";
 import { run, check } from "../src/internals/_pipeline.js";
 
 const DATABASE_URL = "postgresql://appuser:secret@localhost:5432/sqlove_test";
@@ -54,7 +55,7 @@ afterAll(() => {
 
 describe("pipeline end-to-end", () => {
   it("generates a sql.ts file from sql/ directory", async () => {
-    const result = await run(join(TMP, "src"));
+    const result = await Effect.runPromise(run(join(TMP, "src")));
 
     expect(result.errors).toHaveLength(0);
     expect(result.modules).toHaveLength(1);
@@ -76,12 +77,12 @@ describe("pipeline end-to-end", () => {
   });
 
   it("is idempotent — second run writes nothing", async () => {
-    const result = await run(join(TMP, "src"));
+    const result = await Effect.runPromise(run(join(TMP, "src")));
     expect(result.written).toHaveLength(0);
   });
 
   it("check mode passes after generate", async () => {
-    const result = await check(join(TMP, "src"));
+    const result = await Effect.runPromise(check(join(TMP, "src")));
     expect(result.ok).toBe(true);
     expect(result.stale).toHaveLength(0);
   });
@@ -90,12 +91,12 @@ describe("pipeline end-to-end", () => {
     const outPath = join(TMP, "src/app/sql.ts");
     writeFileSync(outPath, "// tampered");
 
-    const result = await check(join(TMP, "src"));
+    const result = await Effect.runPromise(check(join(TMP, "src")));
     expect(result.ok).toBe(false);
     expect(result.stale).toHaveLength(1);
 
     // Restore
-    await run(join(TMP, "src"));
+    await Effect.runPromise(run(join(TMP, "src")));
   });
 
   it("survives a bad query alongside good ones", async () => {
@@ -104,7 +105,7 @@ describe("pipeline end-to-end", () => {
       "SELECT FROM WHERE NOPE"
     );
 
-    const result = await run(join(TMP, "src"));
+    const result = await Effect.runPromise(run(join(TMP, "src")));
 
     // Error collected
     expect(result.errors.length).toBeGreaterThan(0);
@@ -117,6 +118,6 @@ describe("pipeline end-to-end", () => {
 
     // Cleanup
     rmSync(join(TMP, "src/app/sql/bad_query.sql"));
-    await run(join(TMP, "src"));
+    await Effect.runPromise(run(join(TMP, "src")));
   });
 });

@@ -9,176 +9,192 @@
  * Two modes:
  *   run()   — generate files, return what was written
  *   check() — compare generated vs existing, return stale
- *
- * NOTE: _ is to make it visually first in the file list.
  */
 
+import { Effect } from "effect";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { discover } from "./discovery.js";
 import { parse, validateQueryName } from "./parser.js";
 import { createClient, introspect } from "./introspector.js";
 import { generate } from "./codegen.js";
+import type { SqlFile, ParsedQuery, GeneratedModule } from "./types.js";
 import type { SqloveError } from "./errors.js";
 import * as Err from "./errors.js";
-import type { GeneratedModule, ParsedQuery } from "./types.js";
 
-export interface PipelineResult {
+// ── Public API ───────────────────────────────────────────
+
+export type PipelineResult = {
   modules: GeneratedModule[];
   written: string[];
   errors: SqloveError[];
-}
-
+};
 /**
- * Run the full pipeline: discover → parse → introspect → generate → write.
+ * generates type safe sql.ts files from .sql files
  */
-export async function run(srcDir: string): Promise<PipelineResult> {
-  const modules: GeneratedModule[] = [];
-  const written: string[] = [];
-  const errors: SqloveError[] = [];
-
-  // 1. Discover sql/ directories
-  const discovered = await discover(srcDir);
-  if (discovered.size === 0) {
-    return { modules, written, errors };
-  }
-
-  // 2. Parse all SQL files
-  const moduleQueries = new Map<string, ParsedQuery[]>();
-  for (const [outPath, files] of discovered) {
-    const parsed: ParsedQuery[] = [];
-    for (const file of files) {
-      // Validate name
-      const nameError = validateQueryName(file.queryName);
-      if (nameError) {
-        errors.push(
-          Err.InvalidQueryName(file.filePath, file.queryName, nameError),
-        );
-        continue;
-      }
-      try {
-        parsed.push(parse(file));
-      } catch (err: any) {
-        errors.push(Err.ParseError(file.filePath, err.message ?? String(err)));
-      }
-    }
-    if (parsed.length > 0) {
-      moduleQueries.set(outPath, parsed);
-    }
-  }
-
-  if (moduleQueries.size === 0) {
-    return { modules, written, errors };
-  }
-
-  // 3. Connect to Postgres
-  const client = createClient();
-  try {
-    await client.connect();
-  } catch (err: any) {
-    errors.push(
-      Err.ConnectionError(
-        `${err.message ?? String(err)}\nSet DATABASE_URL or PGHOST/PGPORT/PGUSER/PGDATABASE/PGPASSWORD env vars.`,
-        err,
-      ),
-    );
-    return { modules, written, errors };
-  }
-
-  try {
-    // 4. Introspect + generate each module
-    for (const [outPath, parsed] of moduleQueries) {
-      const result = await introspect(client, parsed);
-      errors.push(...result.errors);
-
-      if (result.queries.length === 0) continue;
-
-      const mod = generate(outPath, result.queries, result.enums);
-      modules.push(mod);
-
-      // 5. Write if changed
-      let existing = "";
-      try {
-        existing = await readFile(outPath, "utf8");
-      } catch {
-        // file doesn't exist yet
-      }
-
-      if (mod.source !== existing) {
-        try {
-          await mkdir(dirname(outPath), { recursive: true });
-          await writeFile(outPath, mod.source);
-          written.push(outPath);
-        } catch (err) {
-          errors.push(Err.WriteError(outPath, err));
-        }
-      }
-    }
-  } finally {
-    await client.end();
-  }
-
-  return { modules, written, errors };
-}
-
-/**
- * Check mode: run the pipeline but don't write. Compare to existing files.
- */
-export async function check(
+export const run = (
   srcDir: string,
-): Promise<{ ok: boolean; stale: string[]; errors: SqloveError[] }> {
-  const discovered = await discover(srcDir);
-  const errors: SqloveError[] = [];
-  const stale: string[] = [];
+): Effect.Effect<PipelineResult, SqloveError> =>
+  Effect.gen(function* () {
+    const { modules, errors } = yield* buildModules(srcDir);
 
-  if (discovered.size === 0) return { ok: true, stale, errors };
+    const writeResults = yield* Effect.forEach(
+      modules,
+      (mod) =>
+        writeIfChanged(mod).pipe(
+          Effect.catchAll((writeErr: SqloveError) => {
+            errors.push(writeErr);
+            return Effect.succeed(null);
+          }),
+        ),
+      { concurrency: 1 },
+    );
 
-  const moduleQueries = new Map<string, ParsedQuery[]>();
-  for (const [outPath, files] of discovered) {
-    const parsed: ParsedQuery[] = [];
-    for (const file of files) {
-      const nameError = validateQueryName(file.queryName);
-      if (nameError) {
-        errors.push(
-          Err.InvalidQueryName(file.filePath, file.queryName, nameError),
-        );
-        continue;
-      }
-      try {
-        parsed.push(parse(file));
-      } catch (err: any) {
-        errors.push(Err.ParseError(file.filePath, err.message));
-      }
+    return {
+      modules,
+      written: writeResults.filter((p): p is string => p !== null),
+      errors,
+    };
+  });
+
+export const check = (srcDir: string) =>
+  Effect.gen(function* () {
+    const { modules, errors } = yield* buildModules(srcDir);
+
+    const stale: string[] = [];
+    for (const mod of modules) {
+      const existing = yield* readExisting(mod.outputPath);
+      if (mod.source !== existing) stale.push(mod.outputPath);
     }
-    if (parsed.length > 0) moduleQueries.set(outPath, parsed);
-  }
 
-  if (moduleQueries.size === 0) return { ok: true, stale, errors };
+    return { ok: stale.length === 0, stale, errors };
+  });
 
-  const client = createClient();
-  try {
-    await client.connect();
-  } catch (err: any) {
-    errors.push(Err.ConnectionError(err.message, err));
-    return { ok: false, stale, errors };
-  }
+// ── Shared pipeline ──────────────────────────────────────
 
-  try {
-    for (const [outPath, parsed] of moduleQueries) {
-      const result = await introspect(client, parsed);
-      errors.push(...result.errors);
-      if (result.queries.length === 0) continue;
+/** Discover → parse → introspect → generate. No filesystem writes. */
+const buildModules = (srcDir: string) =>
+  Effect.gen(function* () {
+    const discovered = yield* Effect.tryPromise({
+      try: () => discover(srcDir),
+      catch: (cause) => Err.FileReadError(srcDir, cause),
+    });
 
-      const mod = generate(outPath, result.queries, result.enums);
-      let existing = "";
-      try {
-        existing = await readFile(outPath, "utf8");
-      } catch {}
-      if (mod.source !== existing) stale.push(outPath);
-    }
-  } finally {
-    await client.end();
-  }
+    if (discovered.size === 0)
+      return { modules: [] as GeneratedModule[], errors: [] as SqloveError[] };
 
-  return { ok: stale.length === 0, stale, errors };
+    // Parse phase — collect errors, keep going
+    const parseResults = [...discovered.entries()].map(([outPath, files]) =>
+      parseModule(outPath, files),
+    );
+
+    const parseErrors = parseResults.flatMap((r) => r.errors);
+    const validModules = parseResults.filter((r) => r.queries.length > 0);
+
+    if (validModules.length === 0)
+      return { modules: [] as GeneratedModule[], errors: parseErrors };
+
+    // Introspect + generate — scoped client
+    const { generated, errors: introErrors } = yield* withClient((client) =>
+      Effect.gen(function* () {
+        const results: GeneratedModule[] = [];
+        const errors: SqloveError[] = [];
+
+        for (const { outPath, queries } of validModules) {
+          const result = yield* Effect.tryPromise({
+            try: () => introspect(client, queries),
+            catch: (e: any) =>
+              Err.IntrospectionError(
+                queries[0]?.file.queryName ?? "unknown",
+                outPath,
+                e.message ?? String(e),
+                e.detail,
+              ),
+          });
+
+          errors.push(...result.errors);
+          if (result.queries.length === 0) continue;
+
+          results.push(generate(outPath, result.queries, result.enums));
+        }
+
+        return { generated: results, errors };
+      }),
+    );
+
+    return {
+      modules: generated,
+      errors: [...parseErrors, ...introErrors],
+    };
+  });
+
+// ── Phases ───────────────────────────────────────────────
+
+interface ParseResult {
+  outPath: string;
+  queries: ParsedQuery[];
+  errors: SqloveError[];
 }
+
+const parseModule = (outPath: string, files: SqlFile[]): ParseResult => {
+  const queries: ParsedQuery[] = [];
+  const errors: SqloveError[] = [];
+
+  for (const file of files) {
+    const nameErr = validateQueryName(file.queryName);
+    if (nameErr) {
+      errors.push(Err.InvalidQueryName(file.filePath, file.queryName, nameErr));
+      continue;
+    }
+    try {
+      queries.push(parse(file));
+    } catch (e: any) {
+      errors.push(Err.ParseError(file.filePath, e.message ?? String(e)));
+    }
+  }
+
+  return { outPath, queries, errors };
+};
+
+const withClient = <A>(
+  f: (client: ReturnType<typeof createClient>) => Effect.Effect<A, SqloveError>,
+): Effect.Effect<A, SqloveError> =>
+  Effect.acquireUseRelease(
+    Effect.tryPromise({
+      try: () => {
+        const c = createClient();
+        return c.connect().then(() => c);
+      },
+      catch: (e: any) =>
+        Err.ConnectionError(
+          `${e.message ?? String(e)}\nSet DATABASE_URL or PGHOST/PGPORT/PGUSER/PGDATABASE/PGPASSWORD env vars.`,
+          e,
+        ),
+    }),
+    f,
+    (client) => Effect.promise(() => client.end()),
+  );
+
+// ── Write helpers ────────────────────────────────────────
+
+const readExisting = (path: string) =>
+  Effect.tryPromise({
+    try: () => readFile(path, "utf8"),
+    catch: () => null,
+  }).pipe(Effect.catchAll(() => Effect.succeed("")));
+
+const writeIfChanged = (mod: GeneratedModule) =>
+  Effect.gen(function* () {
+    const existing = yield* readExisting(mod.outputPath);
+    if (mod.source === existing) return null;
+
+    yield* Effect.tryPromise({
+      try: async () => {
+        await mkdir(dirname(mod.outputPath), { recursive: true });
+        await writeFile(mod.outputPath, mod.source);
+      },
+      catch: (cause) => Err.WriteError(mod.outputPath, cause),
+    });
+
+    return mod.outputPath;
+  });
