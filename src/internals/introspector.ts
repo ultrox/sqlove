@@ -47,7 +47,7 @@ class DescribeSubmittable {
   constructor(
     private sql: string,
     private _resolve: (r: RawQueryDesc) => void,
-    private _reject: (e: Error) => void
+    private _reject: (e: Error) => void,
   ) {}
 
   submit(connection: any) {
@@ -110,7 +110,7 @@ function describeRaw(client: pg.Client, sql: string): Promise<RawQueryDesc> {
 
 async function resolveNullability(
   client: pg.Client,
-  columns: RawColumnDesc[]
+  columns: RawColumnDesc[],
 ): Promise<boolean[]> {
   const nullable = new Array<boolean>(columns.length).fill(false);
   const tableCols = columns
@@ -126,7 +126,7 @@ async function resolveNullability(
     attnotnull: boolean;
   }>(
     `SELECT attrelid::int, attnum::int, attnotnull
-     FROM pg_attribute WHERE (attrelid, attnum) IN (${pairs.join(",")})`
+     FROM pg_attribute WHERE (attrelid, attnum) IN (${pairs.join(",")})`,
   );
 
   const notNull = new Map<string, boolean>();
@@ -145,7 +145,7 @@ async function resolveNullability(
 async function resolveParamNullability(
   client: pg.Client,
   raw: RawQueryDesc,
-  pq: ParsedQuery
+  pq: ParsedQuery,
 ): Promise<Map<number, boolean>> {
   const result = new Map<number, boolean>();
 
@@ -169,7 +169,7 @@ async function resolveParamNullability(
     if (tableMatch) {
       const { rows } = await client.query<{ oid: number }>(
         `SELECT oid::int FROM pg_class WHERE relname = $1`,
-        [tableMatch[1]]
+        [tableMatch[1]],
       );
       if (rows[0]) tableOID = rows[0].oid;
     }
@@ -184,7 +184,7 @@ async function resolveParamNullability(
   }>(
     `SELECT attname, attnotnull FROM pg_attribute
      WHERE attrelid = $1 AND attnum > 0 AND NOT attisdropped`,
-    [tableOID]
+    [tableOID],
   );
 
   const colNullable = new Map<string, boolean>();
@@ -213,7 +213,7 @@ export interface IntrospectResult {
 
 export async function introspect(
   client: pg.Client,
-  parsedQueries: ParsedQuery[]
+  parsedQueries: ParsedQuery[],
 ): Promise<IntrospectResult> {
   const resolver = new TypeResolver(client);
   const queries: TypedQuery[] = [];
@@ -222,20 +222,23 @@ export async function introspect(
   for (const pq of parsedQueries) {
     try {
       const raw = await describeRaw(client, pq.file.content);
-      const allOids = [...raw.paramOIDs, ...raw.columns.map((c) => c.dataTypeOID)];
+      const allOids = [
+        ...raw.paramOIDs,
+        ...raw.columns.map((c) => c.dataTypeOID),
+      ];
       await resolver.prefetch(allOids);
 
       const nullable = await resolveNullability(client, raw.columns);
 
       // Resolve param nullability for INSERT/SET params
-      const paramNullability = await resolveParamNullability(
-        client, raw, pq
-      );
+      const paramNullability = await resolveParamNullability(client, raw, pq);
 
       const params: ResolvedParam[] = raw.paramOIDs.map((oid, i) => {
         const tsType = resolver.resolve(oid);
         if (!tsType) {
-          throw Object.assign(new Error(`unsupported param type OID ${oid}`), { oid });
+          throw Object.assign(new Error(`unsupported param type OID ${oid}`), {
+            oid,
+          });
         }
         const idx = i + 1;
         const name = pq.paramHints.get(idx) ?? `arg${idx}`;
@@ -246,11 +249,19 @@ export async function introspect(
       const columns: ResolvedColumn[] = raw.columns.map((col, i) => {
         const tsType = resolver.resolve(col.dataTypeOID);
         if (!tsType) {
-          throw Object.assign(new Error(`unsupported column type OID ${col.dataTypeOID}`), {
-            oid: col.dataTypeOID,
-          });
+          throw Object.assign(
+            new Error(`unsupported column type OID ${col.dataTypeOID}`),
+            {
+              oid: col.dataTypeOID,
+            },
+          );
         }
-        return { name: col.name, oid: col.dataTypeOID, tsType, nullable: nullable[i]! };
+        return {
+          name: col.name,
+          oid: col.dataTypeOID,
+          tsType,
+          nullable: nullable[i]!,
+        };
       });
 
       const isMutation = raw.columns.length === 0;
@@ -272,8 +283,8 @@ export async function introspect(
             pq.file.queryName,
             pq.file.filePath,
             err.message ?? String(err),
-            err.detail
-          )
+            err.detail,
+          ),
         );
       }
     }

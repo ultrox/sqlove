@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { TypeResolver } from "../src/type-map.js";
+import { TypeResolver } from "../src/internals/type-map.js";
 
 // TypeResolver needs a pg.Client for prefetch, but resolve() works
 // for builtin OIDs without any DB connection.

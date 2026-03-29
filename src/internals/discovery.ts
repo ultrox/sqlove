@@ -23,7 +23,7 @@ import type { SqlFile } from "./types.js";
  *   src/users/sql/list.sql    → output: src/users/sql.ts
  */
 export async function discover(
-  srcDir: string
+  srcDir: string,
 ): Promise<Map<string, SqlFile[]>> {
   const result = new Map<string, SqlFile[]>();
   await walk(srcDir, srcDir, result);
@@ -33,7 +33,7 @@ export async function discover(
 async function walk(
   current: string,
   srcDir: string,
-  result: Map<string, SqlFile[]>
+  result: Map<string, SqlFile[]>,
 ): Promise<void> {
   let entries;
   try {
@@ -60,15 +60,16 @@ async function walk(
   }
 }
 
-async function readSqlDir(
-  dir: string,
-  srcDir: string
-): Promise<SqlFile[]> {
+async function readSqlDir(dir: string, srcDir: string): Promise<SqlFile[]> {
   const entries = await readdir(dir, { withFileTypes: true });
   const files: SqlFile[] = [];
 
   for (const entry of entries) {
-    if (!entry.isFile() || extname(entry.name) !== ".sql" || entry.name.startsWith(".")) {
+    if (
+      !entry.isFile() ||
+      extname(entry.name) !== ".sql" ||
+      entry.name.startsWith(".")
+    ) {
       continue;
     }
 

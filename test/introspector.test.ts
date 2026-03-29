@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import pg from "pg";
-import { introspect } from "../src/introspector.js";
-import { parse } from "../src/parser.js";
-import type { SqlFile } from "../src/types.js";
+import { introspect } from "../src/internals/introspector.js";
+import { parse } from "../src/internals/parser.js";
+import type { SqlFile } from "../src/internals/types.js";
 
 const DATABASE_URL = "postgresql://appuser:secret@localhost:5432/sqlove_test";
 let client: pg.Client;

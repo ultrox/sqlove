@@ -132,29 +132,49 @@ const YELLOW = "\x1b[33m";
 const DIM = "\x1b[2m";
 const RESET = "\x1b[0m";
 
+const PRE = `${RED}✗${RESET}`;
 export function formatError(error: SqloveError): string {
   switch (error._tag) {
-    case "FileReadError":
-      return `${RED}✗${RESET} ${error.path}\n  Could not read file: ${String(error.cause)}`;
-    case "ParseError":
-      return `${RED}✗${RESET} ${error.path}\n  ${error.message}`;
-    case "ConnectionError":
-      return `${RED}✗${RESET} Failed to connect to Postgres\n  ${error.message}`;
-    case "IntrospectionError":
+    case "FileReadError": {
+      return `${PRE} ${error.path}\n  Could not read file: ${String(error.cause)}`;
+    }
+
+    case "ParseError": {
+      return `${PRE}✗ ${error.path}\n  ${error.message}`;
+    }
+
+    case "ConnectionError": {
+      return `${PRE} Failed to connect to Postgres\n  ${error.message}`;
+    }
+
+    case "IntrospectionError": {
       return (
-        `${RED}✗${RESET} ${error.path} ${DIM}(${error.queryName})${RESET}\n  ${error.message}` +
+        `${PRE} ${error.path} ${DIM}(${error.queryName})${RESET}\n  ${error.message}` +
         (error.pgMessage ? `\n  ${YELLOW}${error.pgMessage}${RESET}` : "")
       );
-    case "UnsupportedType":
+    }
+
+    case "UnsupportedType": {
       return (
-        `${RED}✗${RESET} ${error.queryName}: unsupported type OID ${error.oid}` +
+        `${PRE} ${error.queryName}: unsupported type OID ${error.oid}` +
         (error.pgTypeName ? ` (${error.pgTypeName})` : "")
       );
-    case "InvalidQueryName":
-      return `${RED}✗${RESET} ${error.path}\n  Invalid query name "${error.name}": ${error.reason}`;
-    case "WriteError":
-      return `${RED}✗${RESET} ${error.path}\n  Could not write file: ${String(error.cause)}`;
-    case "CheckDriftError":
-      return `${RED}✗${RESET} ${error.path}\n  ${error.message}`;
+    }
+
+    case "InvalidQueryName": {
+      return `${PRE} ${error.path}\n  Invalid query name "${error.name}": ${error.reason}`;
+    }
+
+    case "WriteError": {
+      return `${PRE} ${error.path}\n  Could not write file: ${String(error.cause)}`;
+    }
+
+    case "CheckDriftError": {
+      return `${PRE} ${error.path}\n  ${error.message}`;
+    }
+    default: {
+      const _enforce = error satisfies never;
+      return `${PRE} Unknown error: ${_enforce}`;
+    }
   }
 }

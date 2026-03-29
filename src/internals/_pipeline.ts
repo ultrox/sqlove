@@ -9,6 +9,8 @@
  * Two modes:
  *   run()   — generate files, return what was written
  *   check() — compare generated vs existing, return stale
+ *
+ * NOTE: _ is to make it visually first in the file list.
  */
 
 import { readFile, writeFile, mkdir } from "node:fs/promises";
@@ -49,7 +51,9 @@ export async function run(srcDir: string): Promise<PipelineResult> {
       // Validate name
       const nameError = validateQueryName(file.queryName);
       if (nameError) {
-        errors.push(Err.InvalidQueryName(file.filePath, file.queryName, nameError));
+        errors.push(
+          Err.InvalidQueryName(file.filePath, file.queryName, nameError),
+        );
         continue;
       }
       try {
@@ -75,8 +79,8 @@ export async function run(srcDir: string): Promise<PipelineResult> {
     errors.push(
       Err.ConnectionError(
         `${err.message ?? String(err)}\nSet DATABASE_URL or PGHOST/PGPORT/PGUSER/PGDATABASE/PGPASSWORD env vars.`,
-        err
-      )
+        err,
+      ),
     );
     return { modules, written, errors };
   }
@@ -120,7 +124,9 @@ export async function run(srcDir: string): Promise<PipelineResult> {
 /**
  * Check mode: run the pipeline but don't write. Compare to existing files.
  */
-export async function check(srcDir: string): Promise<{ ok: boolean; stale: string[]; errors: SqloveError[] }> {
+export async function check(
+  srcDir: string,
+): Promise<{ ok: boolean; stale: string[]; errors: SqloveError[] }> {
   const discovered = await discover(srcDir);
   const errors: SqloveError[] = [];
   const stale: string[] = [];
@@ -132,8 +138,17 @@ export async function check(srcDir: string): Promise<{ ok: boolean; stale: strin
     const parsed: ParsedQuery[] = [];
     for (const file of files) {
       const nameError = validateQueryName(file.queryName);
-      if (nameError) { errors.push(Err.InvalidQueryName(file.filePath, file.queryName, nameError)); continue; }
-      try { parsed.push(parse(file)); } catch (err: any) { errors.push(Err.ParseError(file.filePath, err.message)); }
+      if (nameError) {
+        errors.push(
+          Err.InvalidQueryName(file.filePath, file.queryName, nameError),
+        );
+        continue;
+      }
+      try {
+        parsed.push(parse(file));
+      } catch (err: any) {
+        errors.push(Err.ParseError(file.filePath, err.message));
+      }
     }
     if (parsed.length > 0) moduleQueries.set(outPath, parsed);
   }
@@ -156,7 +171,9 @@ export async function check(srcDir: string): Promise<{ ok: boolean; stale: strin
 
       const mod = generate(outPath, result.queries, result.enums);
       let existing = "";
-      try { existing = await readFile(outPath, "utf8"); } catch {}
+      try {
+        existing = await readFile(outPath, "utf8");
+      } catch {}
       if (mod.source !== existing) stale.push(outPath);
     }
   } finally {

@@ -1,12 +1,11 @@
 /*
  * Public API re-exports for library/programmatic use.
- * CLI uses pipeline directly.
  */
 
-export { run, check } from "./pipeline.js";
-export { discover } from "./discovery.js";
-export { parse, validateQueryName } from "./parser.js";
-export { generate } from "./codegen.js";
+export { run, check } from "./internals/_pipeline.js";
+export { discover } from "./internals/discovery.js";
+export { parse, validateQueryName } from "./internals/parser.js";
+export { generate } from "./internals/codegen.js";
 export type {
   SqlFile,
   ParsedQuery,
@@ -16,6 +15,6 @@ export type {
   TsType,
   EnumDef,
   GeneratedModule,
-} from "./types.js";
-export type { SqloveError } from "./errors.js";
-export { formatError } from "./errors.js";
+} from "./internals/types.js";
+export type { SqloveError } from "./internals/errors.js";
+export { formatError } from "./internals/errors.js";

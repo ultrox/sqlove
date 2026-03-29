@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { discover } from "../src/discovery.js";
+import { discover } from "../src/internals/discovery.js";
 
 const TMP = join(tmpdir(), `sqlove-test-${Date.now()}`);
 

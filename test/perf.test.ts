@@ -3,12 +3,12 @@ import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import pg from "pg";
-import { run } from "../src/pipeline.js";
-import { discover } from "../src/discovery.js";
-import { parse } from "../src/parser.js";
-import { generate } from "../src/codegen.js";
-import { introspect, createClient } from "../src/introspector.js";
-import type { SqlFile, ParsedQuery } from "../src/types.js";
+import { run } from "../src/internals/_pipeline.js";
+import { discover } from "../src/internals/discovery.js";
+import { parse } from "../src/internals/parser.js";
+import { generate } from "../src/internals/codegen.js";
+import { introspect, createClient } from "../src/internals/introspector.js";
+import type { SqlFile, ParsedQuery } from "../src/internals/types.js";
 
 const DATABASE_URL = "postgresql://appuser:secret@localhost:5432/sqlove_test";
 const TMP = join(tmpdir(), `sqlove-perf-${Date.now()}`);

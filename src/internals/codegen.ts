@@ -33,10 +33,10 @@ const HEADER = `// ============================================================
 export function generate(
   outputPath: string,
   queries: TypedQuery[],
-  enums: EnumDef[]
+  enums: EnumDef[],
 ): GeneratedModule {
   const sorted = [...queries].sort((a, b) =>
-    a.file.queryName.localeCompare(b.file.queryName)
+    a.file.queryName.localeCompare(b.file.queryName),
   );
 
   const lines: string[] = [HEADER, ""];
@@ -89,10 +89,16 @@ function emitEnum(e: EnumDef): string {
 
 // ── Row class ───────────────────────────────────────────────────────────────
 
-function emitRowClass(query: TypedQuery, fnName: string, typeName: string): string {
+function emitRowClass(
+  query: TypedQuery,
+  fnName: string,
+  typeName: string,
+): string {
   const fields = query.columns.map((col) => {
     const camel = snakeToCamel(col.name);
-    const baseSchema = col.nullable ? `Schema.NullOr(${col.tsType.schema})` : col.tsType.schema;
+    const baseSchema = col.nullable
+      ? `Schema.NullOr(${col.tsType.schema})`
+      : col.tsType.schema;
     if (camel !== col.name) {
       return `  ${camel}: Schema.propertySignature(${baseSchema}).pipe(Schema.fromKey("${col.name}")),`;
     }
@@ -111,7 +117,11 @@ function emitRowClass(query: TypedQuery, fnName: string, typeName: string): stri
 
 // ── Function / const ────────────────────────────────────────────────────────
 
-function emitFunction(query: TypedQuery, fnName: string, typeName: string): string {
+function emitFunction(
+  query: TypedQuery,
+  fnName: string,
+  typeName: string,
+): string {
   const displayPath = `${query.file.modulePath}/sql/${query.file.queryName}.sql`;
 
   // JSDoc
@@ -144,7 +154,7 @@ function emitConstQuery(
   fnName: string,
   typeName: string,
   jsdoc: string,
-  templateSql: string
+  templateSql: string,
 ): string {
   return [
     jsdoc,
@@ -163,11 +173,13 @@ function emitParamQuery(
   typeName: string,
   jsdoc: string,
   templateSql: string,
-  query: TypedQuery
+  query: TypedQuery,
 ): string {
   const paramFields = query.params
     .map((p) => {
-      const type = p.nullable ? `${p.tsType.tsAnnotation} | null` : p.tsType.tsAnnotation;
+      const type = p.nullable
+        ? `${p.tsType.tsAnnotation} | null`
+        : p.tsType.tsAnnotation;
       return `    readonly ${snakeToCamel(p.name)}: ${type}`;
     })
     .join(";\n");
@@ -189,7 +201,7 @@ function emitMutationFunction(
   fnName: string,
   jsdoc: string,
   templateSql: string,
-  query: TypedQuery
+  query: TypedQuery,
 ): string {
   if (query.params.length === 0) {
     return [
@@ -203,7 +215,9 @@ function emitMutationFunction(
 
   const paramFields = query.params
     .map((p) => {
-      const type = p.nullable ? `${p.tsType.tsAnnotation} | null` : p.tsType.tsAnnotation;
+      const type = p.nullable
+        ? `${p.tsType.tsAnnotation} | null`
+        : p.tsType.tsAnnotation;
       return `    readonly ${snakeToCamel(p.name)}: ${type}`;
     })
     .join(";\n");
@@ -227,7 +241,10 @@ function emitMutationFunction(
  * Transform SQL with $N placeholders into template literal body
  * where $N becomes ${params.argN}.
  */
-function sqlToTemplate(sql: string, params: readonly import("./types.js").ResolvedParam[]): string {
+function sqlToTemplate(
+  sql: string,
+  params: readonly import("./types.js").ResolvedParam[],
+): string {
   let result = sql.replace(/`/g, "\\`");
 
   // Replace $N (descending to avoid $1 matching inside $10)
@@ -235,7 +252,7 @@ function sqlToTemplate(sql: string, params: readonly import("./types.js").Resolv
   for (const p of sorted) {
     result = result.replace(
       new RegExp(`\\$${p.index}(?!\\d)`, "g"),
-      "${params." + snakeToCamel(p.name) + "}"
+      "${params." + snakeToCamel(p.name) + "}",
     );
   }
 

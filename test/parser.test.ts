@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { parse, validateQueryName } from "../src/parser.js";
-import type { SqlFile } from "../src/types.js";
+import { parse, validateQueryName } from "../src/internals/parser.js";
+import type { SqlFile } from "../src/internals/types.js";
 
 function file(content: string, name = "test_query"): SqlFile {
   return { filePath: `/src/sql/${name}.sql`, queryName: name, modulePath: "app", content };

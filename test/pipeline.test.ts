@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import pg from "pg";
-import { run, check } from "../src/pipeline.js";
+import { run, check } from "../src/internals/_pipeline.js";
 
 const DATABASE_URL = "postgresql://appuser:secret@localhost:5432/sqlove_test";
 const TMP = join(tmpdir(), `sqlove-pipeline-${Date.now()}`);

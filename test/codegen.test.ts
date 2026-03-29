@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { generate } from "../src/codegen.js";
-import type { TypedQuery, EnumDef } from "../src/types.js";
+import { generate } from "../src/internals/codegen.js";
+import type { TypedQuery, EnumDef } from "../src/internals/types.js";
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 

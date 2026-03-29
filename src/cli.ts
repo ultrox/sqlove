@@ -11,8 +11,7 @@
  */
 
 import { resolve } from "node:path";
-import { run, check } from "./pipeline.js";
-import { formatError } from "./errors.js";
+import { run, check, formatError } from "./main.js";
 
 const VERSION = "0.1.0";
 const DIM = "\x1b[2m";
