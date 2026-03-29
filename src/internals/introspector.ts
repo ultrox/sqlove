@@ -172,21 +172,23 @@ async function getQueryPlan(
 ): Promise<any | null> {
   const probeName = `_sqlove_explain_${Date.now()}`;
   try {
+    // Use a transaction + force_generic_plan so Postgres
+    // doesn't optimize based on specific param values
+    // (e.g., converting LEFT JOIN to INNER when filtering
+    // on the nullable side, or collapsing WHERE x = NULL).
+    await client.query(`BEGIN`);
+    await client.query(`SET LOCAL plan_cache_mode = force_generic_plan`);
     await client.query(`PREPARE ${probeName} AS ${sql}`);
 
-    // Try NULL first — works unless WHERE collapses the plan
-    let plan = await executeExplain(client, probeName, paramCount, null);
-
-    // Collapsed plan: no join info. Retry with typed dummy values.
-    if (plan && isCollapsedPlan(plan) && paramCount > 0) {
-      plan = await executeExplain(client, probeName, paramCount, paramOIDs);
-    }
-
+    const plan = await executeExplain(client, probeName, paramCount, null);
     return plan;
   } catch {
     return null;
   } finally {
     await client.query(`DEALLOCATE ${probeName}`).catch(() => {});
+    await client.query(`COMMIT`).catch(() => {
+      client.query(`ROLLBACK`).catch(() => {});
+    });
   }
 }
 
@@ -212,11 +214,20 @@ async function executeExplain(
   return (rows[0] as any)?.["QUERY PLAN"]?.[0]?.Plan ?? null;
 }
 
-/** Detect a plan that collapsed due to NULL params (e.g., WHERE id = NULL → false) */
+/** Detect a plan that collapsed or lost join info due to NULL params */
 function isCollapsedPlan(plan: any): boolean {
-  // Collapsed plans have "One-Time Filter": "false" or just a Result node with no joins
   if (plan["One-Time Filter"] === "false") return true;
   if (plan["Node Type"] === "Result" && !plan.Plans) return true;
+  // Plan exists but has no join nodes — NULL may have eliminated joins
+  if (!hasJoinNode(plan)) return true;
+  return false;
+}
+
+function hasJoinNode(node: any): boolean {
+  if (node["Join Type"]) return true;
+  for (const child of node.Plans ?? []) {
+    if (hasJoinNode(child)) return true;
+  }
   return false;
 }
 

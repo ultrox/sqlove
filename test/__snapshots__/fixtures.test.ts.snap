@@ -819,7 +819,7 @@ export class SearchProductsRow extends Schema.Class<SearchProductsRow>("SearchPr
   name: Schema.String,
   price: Schema.String,
   inStock: Schema.propertySignature(Schema.Boolean).pipe(Schema.fromKey("in_stock")),
-  category: Schema.String,
+  category: Schema.NullOr(Schema.String),
   avgRating: Schema.propertySignature(Schema.String).pipe(Schema.fromKey("avg_rating")),
 }) {}
 

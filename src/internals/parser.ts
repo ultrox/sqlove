@@ -109,7 +109,7 @@ function inferParamNames(sql: string, paramCount: number): Map<number, string> {
 
   // Pattern 1: column = $N, column > $N, column >= $N, etc.
   // Also handles: column LIKE $N, column ILIKE $N
-  const comparisonRe = /(\w+)\s*(?:=|!=|<>|>=?|<=?|~~?\*?|!~~?\*?|(?:NOT\s+)?I?LIKE)\s*\$(\d+)/gi;
+  const comparisonRe = /(?:\w+\.)?(\w+)\s*(?:=|!=|<>|>=?|<=?|~~?\*?|!~~?\*?|(?:NOT\s+)?I?LIKE)\s*\$(\d+)/gi;
   let m;
   while ((m = comparisonRe.exec(norm)) !== null) {
     const col = m[1]!.toLowerCase();
