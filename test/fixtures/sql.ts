@@ -176,6 +176,31 @@ export const insertReturning = (
 RETURNING id, name, created_at`
   ));
 
+/** Rows returned by {@link joinChain}.
+ *  @see `/sql/join_chain.sql` */
+export class JoinChainRow extends Schema.Class<JoinChainRow>("JoinChainRow")({
+  name: Schema.String,
+  total: Schema.String,
+  quantity: Schema.Number,
+  sku: Schema.String,
+}) {}
+
+/**
+ * Multiple LEFT JOINs forming a chain.
+ * @see `/sql/join_chain.sql`
+ */
+export const joinChain: Effect.Effect<
+  ReadonlyArray<JoinChainRow>,
+  SqlError,
+  SqlClient
+> = SqlClient.pipe(Effect.flatMap((sql) =>
+  sql<JoinChainRow>`SELECT u.name, o.total, li.quantity, p.sku
+FROM users u
+LEFT JOIN orders o ON o.user_id = u.id
+LEFT JOIN line_items li ON li.order_id = o.id
+LEFT JOIN products p ON p.id = li.product_id`
+));
+
 /** Rows returned by {@link joinCommentTrick}.
  *  @see `/sql/join_comment_trick.sql` */
 export class JoinCommentTrickRow extends Schema.Class<JoinCommentTrickRow>("JoinCommentTrickRow")({
@@ -221,6 +246,56 @@ FROM active_users au
 LEFT JOIN orders o ON o.user_id = au.id`
 ));
 
+/** Rows returned by {@link joinExistsSubquery}.
+ *  @see `/sql/join_exists_subquery.sql` */
+export class JoinExistsSubqueryRow extends Schema.Class<JoinExistsSubqueryRow>("JoinExistsSubqueryRow")({
+  name: Schema.String,
+}) {}
+
+/**
+ * EXISTS subquery with inner LEFT JOIN — should not affect outer columns.
+ * @see `/sql/join_exists_subquery.sql`
+ */
+export const joinExistsSubquery: Effect.Effect<
+  ReadonlyArray<JoinExistsSubqueryRow>,
+  SqlError,
+  SqlClient
+> = SqlClient.pipe(Effect.flatMap((sql) =>
+  sql<JoinExistsSubqueryRow>`SELECT u.name
+FROM users u
+WHERE EXISTS (
+  SELECT 1 FROM orders o
+  LEFT JOIN refunds r ON r.order_id = o.id
+  WHERE o.user_id = u.id
+)`
+));
+
+/** Rows returned by {@link joinLateral}.
+ *  @see `/sql/join_lateral.sql` */
+export class JoinLateralRow extends Schema.Class<JoinLateralRow>("JoinLateralRow")({
+  name: Schema.String,
+  total: Schema.String,
+}) {}
+
+/**
+ * LATERAL join — nullable side depends on outer row.
+ * @see `/sql/join_lateral.sql`
+ */
+export const joinLateral: Effect.Effect<
+  ReadonlyArray<JoinLateralRow>,
+  SqlError,
+  SqlClient
+> = SqlClient.pipe(Effect.flatMap((sql) =>
+  sql<JoinLateralRow>`SELECT u.name, recent.total
+FROM users u
+LEFT JOIN LATERAL (
+  SELECT total FROM orders
+  WHERE user_id = u.id
+  ORDER BY created_at DESC
+  LIMIT 1
+) recent ON true`
+));
+
 /** Rows returned by {@link joinMultiMixed}.
  *  @see `/sql/join_multi_mixed.sql` */
 export class JoinMultiMixedRow extends Schema.Class<JoinMultiMixedRow>("JoinMultiMixedRow")({
@@ -241,6 +316,53 @@ export const joinMultiMixed: Effect.Effect<
 FROM users u
 JOIN orders o ON o.user_id = u.id
 LEFT JOIN tags t ON t.id = 1`
+));
+
+/** Rows returned by {@link joinNestedParens}.
+ *  @see `/sql/join_nested_parens.sql` */
+export class JoinNestedParensRow extends Schema.Class<JoinNestedParensRow>("JoinNestedParensRow")({
+  name: Schema.String,
+  total: Schema.String,
+}) {}
+
+/**
+ * Nested joins with parentheses changing precedence.
+ * Both orders and payments should be nullable.
+ * @see `/sql/join_nested_parens.sql`
+ */
+export const joinNestedParens: Effect.Effect<
+  ReadonlyArray<JoinNestedParensRow>,
+  SqlError,
+  SqlClient
+> = SqlClient.pipe(Effect.flatMap((sql) =>
+  sql<JoinNestedParensRow>`SELECT u.name, o.total
+FROM users u
+LEFT JOIN (orders o JOIN line_items li ON li.order_id = o.id)
+  ON o.user_id = u.id`
+));
+
+/** Rows returned by {@link joinSameTableTwice}.
+ *  @see `/sql/join_same_table_twice.sql` */
+export class JoinSameTableTwiceRow extends Schema.Class<JoinSameTableTwiceRow>("JoinSameTableTwiceRow")({
+  name: Schema.String,
+  managerName: Schema.propertySignature(Schema.String).pipe(Schema.fromKey("manager_name")),
+  total: Schema.String,
+}) {}
+
+/**
+ * Same table joined twice with different aliases.
+ * manager should be nullable, u should not.
+ * @see `/sql/join_same_table_twice.sql`
+ */
+export const joinSameTableTwice: Effect.Effect<
+  ReadonlyArray<JoinSameTableTwiceRow>,
+  SqlError,
+  SqlClient
+> = SqlClient.pipe(Effect.flatMap((sql) =>
+  sql<JoinSameTableTwiceRow>`SELECT u.name, manager.name AS manager_name, o.total
+FROM users u
+LEFT JOIN users manager ON manager.id = u.manager_id
+JOIN orders o ON o.user_id = u.id`
 ));
 
 /** Rows returned by {@link joinSchemaQualified}.
@@ -284,6 +406,31 @@ export const joinSubquery: Effect.Effect<
 FROM users u
 LEFT JOIN (SELECT user_id, sum(total)::numeric(10,2) AS total FROM orders GROUP BY user_id) o
   ON o.user_id = u.id`
+));
+
+/** Rows returned by {@link joinUnionSubquery}.
+ *  @see `/sql/join_union_subquery.sql` */
+export class JoinUnionSubqueryRow extends Schema.Class<JoinUnionSubqueryRow>("JoinUnionSubqueryRow")({
+  name: Schema.String,
+  amount: Schema.String,
+}) {}
+
+/**
+ * UNION inside a subquery joined with LEFT.
+ * @see `/sql/join_union_subquery.sql`
+ */
+export const joinUnionSubquery: Effect.Effect<
+  ReadonlyArray<JoinUnionSubqueryRow>,
+  SqlError,
+  SqlClient
+> = SqlClient.pipe(Effect.flatMap((sql) =>
+  sql<JoinUnionSubqueryRow>`SELECT u.name, combined.amount
+FROM users u
+LEFT JOIN (
+  SELECT o.user_id, r.amount FROM refunds r JOIN orders o ON o.id = r.order_id
+  UNION ALL
+  SELECT user_id, total AS amount FROM orders
+) combined ON combined.user_id = u.id`
 ));
 
 /** Rows returned by {@link leftJoin}.

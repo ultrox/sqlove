@@ -190,14 +190,9 @@ async function resolveJoinNullability(
         // matching the order of our result columns
         const output: string[] = plan.Output ?? [];
         for (let i = 0; i < output.length && i < columns.length; i++) {
-          const ref = output[i]!;
-          // Extract alias prefix: "u.name" → "u", "(expr)" → skip
-          const dotIdx = ref.indexOf(".");
-          if (dotIdx > 0) {
-            const alias = ref.slice(0, dotIdx);
-            if (nullableAliases.has(alias)) {
-              nullableIndices.add(i);
-            }
+          const alias = extractAliasFromOutput(output[i]!);
+          if (alias && nullableAliases.has(alias)) {
+            nullableIndices.add(i);
           }
         }
 
@@ -265,6 +260,27 @@ function collectAllAliases(node: any, result: Set<string>): void {
   for (const child of node.Plans ?? []) {
     collectAllAliases(child, result);
   }
+}
+
+/**
+ * Extract alias prefix from an EXPLAIN Output entry.
+ *   "u.name"              → "u"
+ *   "\"*SELECT* 1\".amount" → "*SELECT* 1"
+ *   "(expression)"        → null
+ */
+function extractAliasFromOutput(ref: string): string | null {
+  // Quoted alias: "\"something\".column"
+  if (ref.startsWith('"')) {
+    const closeQuote = ref.indexOf('"', 1);
+    if (closeQuote > 1 && ref[closeQuote + 1] === ".") {
+      return ref.slice(1, closeQuote);
+    }
+    return null;
+  }
+  // Simple alias: "u.name"
+  const dotIdx = ref.indexOf(".");
+  if (dotIdx > 0) return ref.slice(0, dotIdx);
+  return null;
 }
 
 /** Collect table OIDs that match nullable aliases (unused, keeping for OID-based fallback). */

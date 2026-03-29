@@ -73,4 +73,42 @@ describe("join nullability edge cases", () => {
     expect(cols["name"]!.nullable).toBe(false);
     expect(cols["total"]!.nullable).toBe(false);
   });
+
+  it("LATERAL: right side is nullable", async () => {
+    const cols = await describeColumns("join_lateral");
+    expect(cols["name"]!.nullable).toBe(false);
+    expect(cols["total"]!.nullable).toBe(true);
+  });
+
+  it("chain: all LEFT JOIN right sides are nullable", async () => {
+    const cols = await describeColumns("join_chain");
+    expect(cols["name"]!.nullable).toBe(false);    // users — FROM
+    expect(cols["total"]!.nullable).toBe(true);     // orders — LEFT JOIN
+    expect(cols["quantity"]!.nullable).toBe(true);  // line_items — LEFT JOIN
+    expect(cols["sku"]!.nullable).toBe(true);       // products — LEFT JOIN
+  });
+
+  it("UNION subquery: LEFT JOIN side is nullable", async () => {
+    const cols = await describeColumns("join_union_subquery");
+    expect(cols["name"]!.nullable).toBe(false);
+    expect(cols["amount"]!.nullable).toBe(true);
+  });
+
+  it("same table twice: only the LEFT JOIN alias is nullable", async () => {
+    const cols = await describeColumns("join_same_table_twice");
+    expect(cols["name"]!.nullable).toBe(false);          // u.name — FROM
+    expect(cols["manager_name"]!.nullable).toBe(true);   // manager.name — LEFT JOIN
+    expect(cols["total"]!.nullable).toBe(false);          // o.total — INNER JOIN
+  });
+
+  it("nested parens: both tables inside LEFT JOIN are nullable", async () => {
+    const cols = await describeColumns("join_nested_parens");
+    expect(cols["name"]!.nullable).toBe(false);    // users — FROM
+    expect(cols["total"]!.nullable).toBe(true);     // orders — inside LEFT JOIN parens
+  });
+
+  it("EXISTS subquery: inner LEFT JOIN does not affect outer columns", async () => {
+    const cols = await describeColumns("join_exists_subquery");
+    expect(cols["name"]!.nullable).toBe(false);  // users.name — NOT NULL, no outer join
+  });
 });
