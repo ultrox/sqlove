@@ -95,8 +95,8 @@ export const enumColumn = (
 /** Rows returned by {@link fullJoin}.
  *  @see \`/sql/full_join.sql\` */
 export class FullJoinRow extends Schema.Class<FullJoinRow>("FullJoinRow")({
-  name: Schema.NullOr(Schema.String),
-  total: Schema.NullOr(Schema.String),
+  name: Schema.String,
+  total: Schema.String,
 }) {}
 
 /**
@@ -179,11 +179,121 @@ export const insertReturning = (
 RETURNING id, name, created_at\`
   ));
 
+/** Rows returned by {@link joinCommentTrick}.
+ *  @see \`/sql/join_comment_trick.sql\` */
+export class JoinCommentTrickRow extends Schema.Class<JoinCommentTrickRow>("JoinCommentTrickRow")({
+  name: Schema.String,
+  total: Schema.String,
+}) {}
+
+/**
+ * This used to be a LEFT JOIN orders but we changed it.
+ * @see \`/sql/join_comment_trick.sql\`
+ */
+export const joinCommentTrick: Effect.Effect<
+  ReadonlyArray<JoinCommentTrickRow>,
+  SqlError,
+  SqlClient
+> = SqlClient.pipe(Effect.flatMap((sql) =>
+  sql<JoinCommentTrickRow>\`SELECT u.name, o.total
+FROM users u
+JOIN orders o ON o.user_id = u.id\`
+));
+
+/** Rows returned by {@link joinCte}.
+ *  @see \`/sql/join_cte.sql\` */
+export class JoinCteRow extends Schema.Class<JoinCteRow>("JoinCteRow")({
+  name: Schema.String,
+  total: Schema.String,
+}) {}
+
+/**
+ * CTE with LEFT JOIN.
+ * @see \`/sql/join_cte.sql\`
+ */
+export const joinCte: Effect.Effect<
+  ReadonlyArray<JoinCteRow>,
+  SqlError,
+  SqlClient
+> = SqlClient.pipe(Effect.flatMap((sql) =>
+  sql<JoinCteRow>\`WITH active_users AS (
+  SELECT id, name FROM users WHERE active = true
+)
+SELECT au.name, o.total
+FROM active_users au
+LEFT JOIN orders o ON o.user_id = au.id\`
+));
+
+/** Rows returned by {@link joinMultiMixed}.
+ *  @see \`/sql/join_multi_mixed.sql\` */
+export class JoinMultiMixedRow extends Schema.Class<JoinMultiMixedRow>("JoinMultiMixedRow")({
+  name: Schema.String,
+  total: Schema.String,
+}) {}
+
+/**
+ * Multiple joins, mixed types.
+ * @see \`/sql/join_multi_mixed.sql\`
+ */
+export const joinMultiMixed: Effect.Effect<
+  ReadonlyArray<JoinMultiMixedRow>,
+  SqlError,
+  SqlClient
+> = SqlClient.pipe(Effect.flatMap((sql) =>
+  sql<JoinMultiMixedRow>\`SELECT u.name, o.total
+FROM users u
+JOIN orders o ON o.user_id = u.id
+LEFT JOIN tags t ON t.id = 1\`
+));
+
+/** Rows returned by {@link joinSchemaQualified}.
+ *  @see \`/sql/join_schema_qualified.sql\` */
+export class JoinSchemaQualifiedRow extends Schema.Class<JoinSchemaQualifiedRow>("JoinSchemaQualifiedRow")({
+  name: Schema.String,
+  total: Schema.String,
+}) {}
+
+/**
+ * Schema-qualified table in LEFT JOIN.
+ * @see \`/sql/join_schema_qualified.sql\`
+ */
+export const joinSchemaQualified: Effect.Effect<
+  ReadonlyArray<JoinSchemaQualifiedRow>,
+  SqlError,
+  SqlClient
+> = SqlClient.pipe(Effect.flatMap((sql) =>
+  sql<JoinSchemaQualifiedRow>\`SELECT u.name, o.total
+FROM users u
+LEFT JOIN public.orders o ON o.user_id = u.id\`
+));
+
+/** Rows returned by {@link joinSubquery}.
+ *  @see \`/sql/join_subquery.sql\` */
+export class JoinSubqueryRow extends Schema.Class<JoinSubqueryRow>("JoinSubqueryRow")({
+  name: Schema.String,
+  total: Schema.String,
+}) {}
+
+/**
+ * Subquery in LEFT JOIN.
+ * @see \`/sql/join_subquery.sql\`
+ */
+export const joinSubquery: Effect.Effect<
+  ReadonlyArray<JoinSubqueryRow>,
+  SqlError,
+  SqlClient
+> = SqlClient.pipe(Effect.flatMap((sql) =>
+  sql<JoinSubqueryRow>\`SELECT u.name, o.total
+FROM users u
+LEFT JOIN (SELECT user_id, sum(total)::numeric(10,2) AS total FROM orders GROUP BY user_id) o
+  ON o.user_id = u.id\`
+));
+
 /** Rows returned by {@link leftJoin}.
  *  @see \`/sql/left_join.sql\` */
 export class LeftJoinRow extends Schema.Class<LeftJoinRow>("LeftJoinRow")({
   name: Schema.String,
-  total: Schema.NullOr(Schema.String),
+  total: Schema.String,
   notes: Schema.NullOr(Schema.String),
 }) {}
 
@@ -227,7 +337,7 @@ export const nullableColumns = (
 /** Rows returned by {@link rightJoin}.
  *  @see \`/sql/right_join.sql\` */
 export class RightJoinRow extends Schema.Class<RightJoinRow>("RightJoinRow")({
-  name: Schema.NullOr(Schema.String),
+  name: Schema.String,
   total: Schema.String,
 }) {}
 

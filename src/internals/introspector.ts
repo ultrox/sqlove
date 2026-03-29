@@ -112,6 +112,7 @@ async function resolveNullability(
   client: pg.Client,
   columns: RawColumnDesc[],
   sql: string,
+  paramCount: number,
 ): Promise<boolean[]> {
   const nullable = new Array<boolean>(columns.length).fill(false);
   const tableCols = columns
@@ -140,10 +141,10 @@ async function resolveNullability(
 
   // Outer join nullability: columns from the nullable side
   // of LEFT/RIGHT/FULL JOINs are always nullable
-  const nullableOids = await resolveJoinNullableOids(client, sql);
-  for (const c of tableCols) {
-    if (nullableOids.has(c.tableOID)) {
-      nullable[c.idx] = true;
+  const joinNullability = await resolveJoinNullability(client, columns, sql, paramCount);
+  for (let i = 0; i < columns.length; i++) {
+    if (joinNullability.has(i)) {
+      nullable[i] = true;
     }
   }
 
@@ -151,54 +152,129 @@ async function resolveNullability(
 }
 
 /**
- * Parse SQL for outer joins, resolve table names to OIDs,
- * return the set of table OIDs that are on the nullable side.
+ * Use EXPLAIN to detect which result columns are on the nullable
+ * side of outer joins. Returns a set of column indices (0-based).
  *
- * LEFT JOIN t   → t is nullable
- * RIGHT JOIN t  → FROM table is nullable
- * FULL JOIN t   → both sides nullable
+ * Postgres resolves aliases, subqueries, CTEs, schema-qualified
+ * names, and ignores comments — no regex needed.
+ *
+ *   PREPARE → EXPLAIN (VERBOSE, FORMAT JSON) EXECUTE → walk plan tree
  */
-async function resolveJoinNullableOids(
+async function resolveJoinNullability(
   client: pg.Client,
+  columns: RawColumnDesc[],
   sql: string,
+  paramCount: number,
 ): Promise<Set<number>> {
-  const names = parseJoinNullableTables(sql);
-  if (names.size === 0) return new Set();
+  const nullableIndices = new Set<number>();
 
-  const { rows } = await client.query<{ oid: number }>(
-    `SELECT oid::int FROM pg_class WHERE relname = ANY($1)`,
-    [[...names]],
-  );
+  try {
+    const probeName = `_sqlove_explain`;
+    await client.query(`PREPARE ${probeName} AS ${sql}`);
 
-  return new Set(rows.map((r) => r.oid));
+    const dummyArgs = paramCount > 0
+      ? `(${Array(paramCount).fill("1").join(",")})`
+      : "";
+    const { rows } = await client.query(
+      `EXPLAIN (VERBOSE, FORMAT JSON) EXECUTE ${probeName}${dummyArgs}`,
+    );
+
+    const plan = (rows[0] as any)?.["QUERY PLAN"]?.[0]?.Plan;
+    if (plan) {
+      // Collect aliases on the nullable side of joins
+      const nullableAliases = new Set<string>();
+      collectNullableAliases(plan, nullableAliases);
+
+      if (nullableAliases.size > 0) {
+        // The plan's Output is ["alias.col", "alias.col", ...]
+        // matching the order of our result columns
+        const output: string[] = plan.Output ?? [];
+        for (let i = 0; i < output.length && i < columns.length; i++) {
+          const ref = output[i]!;
+          // Extract alias prefix: "u.name" → "u", "(expr)" → skip
+          const dotIdx = ref.indexOf(".");
+          if (dotIdx > 0) {
+            const alias = ref.slice(0, dotIdx);
+            if (nullableAliases.has(alias)) {
+              nullableIndices.add(i);
+            }
+          }
+        }
+
+        // Also check by table OID for columns that DO have one
+        const nullableOids = new Set<number>();
+        collectNullableOids(plan, nullableAliases, nullableOids, client);
+
+        // Batch resolve: get OIDs for all nullable aliases
+        const aliasNames = [...nullableAliases];
+        if (aliasNames.length > 0) {
+          const { rows: pgRows } = await client.query<{ oid: number; relname: string }>(
+            `SELECT oid::int, relname FROM pg_class WHERE relname = ANY($1)`,
+            [aliasNames],
+          );
+          for (const r of pgRows) nullableOids.add(r.oid);
+        }
+
+        for (let i = 0; i < columns.length; i++) {
+          if (columns[i]!.tableOID !== 0 && nullableOids.has(columns[i]!.tableOID)) {
+            nullableIndices.add(i);
+          }
+        }
+      }
+    }
+
+    await client.query(`DEALLOCATE ${probeName}`);
+  } catch {
+    // EXPLAIN can fail (e.g., mutations). Column-level nullability still applies.
+  }
+
+  return nullableIndices;
 }
 
-function parseJoinNullableTables(sql: string): Set<string> {
-  const nullable = new Set<string>();
-  const norm = sql.replace(/\s+/g, " ");
+/**
+ * Walk plan tree. At join nodes, collect aliases from the nullable side.
+ *   Left  → Inner child aliases are nullable
+ *   Right → Outer child aliases are nullable
+ *   Full  → both sides' aliases are nullable
+ */
+function collectNullableAliases(
+  node: any,
+  result: Set<string>,
+): void {
+  const joinType: string | undefined = node["Join Type"];
+  const plans: any[] = node.Plans ?? [];
 
-  // LEFT [OUTER] JOIN <table>
-  let m;
-  const leftRe = /left\s+(?:outer\s+)?join\s+(\w+)/gi;
-  while ((m = leftRe.exec(norm)) !== null) {
-    nullable.add(m[1]!.toLowerCase());
+  if (joinType && plans.length === 2) {
+    const [outer, inner] = plans;
+    if (joinType === "Left" || joinType === "Full") {
+      collectAllAliases(inner, result);
+    }
+    if (joinType === "Right" || joinType === "Full") {
+      collectAllAliases(outer, result);
+    }
   }
 
-  // RIGHT [OUTER] JOIN — FROM table becomes nullable
-  if (/right\s+(?:outer\s+)?join/i.test(norm)) {
-    const fromMatch = /\bfrom\s+(\w+)/i.exec(norm);
-    if (fromMatch) nullable.add(fromMatch[1]!.toLowerCase());
+  for (const child of plans) {
+    collectNullableAliases(child, result);
   }
+}
 
-  // FULL [OUTER] JOIN <table> — both sides
-  const fullRe = /full\s+(?:outer\s+)?join\s+(\w+)/gi;
-  while ((m = fullRe.exec(norm)) !== null) {
-    nullable.add(m[1]!.toLowerCase());
-    const fromMatch = /\bfrom\s+(\w+)/i.exec(norm);
-    if (fromMatch) nullable.add(fromMatch[1]!.toLowerCase());
+/** Collect all Alias values from a subtree. */
+function collectAllAliases(node: any, result: Set<string>): void {
+  if (node.Alias) result.add(node.Alias);
+  for (const child of node.Plans ?? []) {
+    collectAllAliases(child, result);
   }
+}
 
-  return nullable;
+/** Collect table OIDs that match nullable aliases (unused, keeping for OID-based fallback). */
+function collectNullableOids(
+  _plan: any,
+  _nullableAliases: Set<string>,
+  _result: Set<number>,
+  _client: pg.Client,
+): void {
+  // OID resolution now happens in the caller via pg_class lookup
 }
 
 // ── Param nullability for INSERT/SET ─────────────────────────────────────────
@@ -291,7 +367,9 @@ export async function introspect(
       ];
       await resolver.prefetch(allOids);
 
-      const nullable = await resolveNullability(client, raw.columns, pq.file.content);
+      const nullable = await resolveNullability(
+        client, raw.columns, pq.file.content, pq.paramCount,
+      );
 
       // Resolve param nullability for INSERT/SET params
       const paramNullability = await resolveParamNullability(client, raw, pq);

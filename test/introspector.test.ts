@@ -129,63 +129,8 @@ describe("introspect", () => {
     expect(params[2]!.tsType.tsAnnotation).toBe("TodoPriority");  // enum
   });
 
-  it("LEFT JOIN columns are nullable", async () => {
-    const pq = parse(file("join_q", `
-      SELECT users.name, orders.total
-      FROM users
-      LEFT JOIN orders ON orders.user_id = users.id
-    `));
-    const result = await introspect(client, [pq]);
-    const cols = result.queries[0]!.columns;
-
-    const byName = Object.fromEntries(cols.map((c) => [c.name, c]));
-    // users.name comes from the left side — NOT NULL, stays not null
-    expect(byName["name"]!.nullable).toBe(false);
-    // orders.total comes from the RIGHT side of LEFT JOIN — can be null
-    expect(byName["total"]!.nullable).toBe(true);
-  });
-
-  it("RIGHT JOIN makes left-side columns nullable", async () => {
-    const pq = parse(file("right_join_q", `
-      SELECT users.name, orders.total
-      FROM users
-      RIGHT JOIN orders ON orders.user_id = users.id
-    `));
-    const result = await introspect(client, [pq]);
-    const cols = result.queries[0]!.columns;
-    const byName = Object.fromEntries(cols.map((c) => [c.name, c]));
-
-    expect(byName["name"]!.nullable).toBe(true);   // left side of RIGHT JOIN
-    expect(byName["total"]!.nullable).toBe(false);  // right side, NOT NULL
-  });
-
-  it("FULL JOIN makes both sides nullable", async () => {
-    const pq = parse(file("full_join_q", `
-      SELECT users.name, orders.total
-      FROM users
-      FULL JOIN orders ON orders.user_id = users.id
-    `));
-    const result = await introspect(client, [pq]);
-    const cols = result.queries[0]!.columns;
-    const byName = Object.fromEntries(cols.map((c) => [c.name, c]));
-
-    expect(byName["name"]!.nullable).toBe(true);
-    expect(byName["total"]!.nullable).toBe(true);
-  });
-
-  it("INNER JOIN does not make columns nullable", async () => {
-    const pq = parse(file("inner_join_q", `
-      SELECT users.name, orders.total
-      FROM users
-      INNER JOIN orders ON orders.user_id = users.id
-    `));
-    const result = await introspect(client, [pq]);
-    const cols = result.queries[0]!.columns;
-    const byName = Object.fromEntries(cols.map((c) => [c.name, c]));
-
-    expect(byName["name"]!.nullable).toBe(false);
-    expect(byName["total"]!.nullable).toBe(false);
-  });
+  // Join nullability tests are in test/joins.test.ts
+  // using fixture .sql files against real Postgres.
 
   it("resolves timestamp columns as Date", async () => {
     const pq = parse(file("ts", "SELECT created_at FROM todo LIMIT 1"));
