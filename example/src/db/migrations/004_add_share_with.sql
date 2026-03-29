@@ -1,1 +1,1 @@
-ALTER TABLE todo ADD COLUMN share_with text;
+ALTER TABLE todo ADD COLUMN IF NOT EXISTS share_with text;

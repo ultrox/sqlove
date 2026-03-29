@@ -1,1 +1,1 @@
-ALTER TABLE todo ADD COLUMN due_date date;
+ALTER TABLE todo ADD COLUMN IF NOT EXISTS due_date date;

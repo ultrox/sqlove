@@ -8,7 +8,8 @@ services:
       POSTGRES_PASSWORD: sqlove
       POSTGRES_DB: sqlove_test
     volumes:
-      - ./test/fixtures/schema.sql:/docker-entrypoint-initdb.d/schema.sql
+      - ./test/fixtures/schema.sql:/docker-entrypoint-initdb.d/01-test-schema.sql
+      - ./docker-init-example-db.sql:/docker-entrypoint-initdb.d/02-example-db.sql
     healthcheck:
       test: pg_isready -U sqlove
       interval: 2s

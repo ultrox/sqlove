@@ -59,11 +59,12 @@ export const createTodo = (
     readonly description: string | null;
     readonly priority: TodoPriority;
     readonly shareWith: string | null;
+    readonly fido: string | null;
   }
 ): Effect.Effect<ReadonlyArray<CreateTodoRow>, SqlError, SqlClient> =>
   SqlClient.pipe(Effect.flatMap((sql) =>
-    sql<CreateTodoRow>`INSERT INTO todo (title, description, priority, share_with)
-VALUES (${params.title}, ${params.description}, ${params.priority}::todo_priority, ${params.shareWith})
+    sql<CreateTodoRow>`INSERT INTO todo (title, description, priority, share_with, fido)
+VALUES (${params.title}, ${params.description}, ${params.priority}::todo_priority, ${params.shareWith}, ${params.fido})
 RETURNING id, title, priority, done, created_at`
   ));
 

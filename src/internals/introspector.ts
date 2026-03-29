@@ -16,10 +16,9 @@
  */
 
 import pg from "pg";
-import { Effect, Option, Data } from "effect";
+import { Effect, Option, Data, Array as Arr } from "effect";
 import { TypeResolver } from "./type-map.js";
 import type {
-  EnumDef,
   ParsedQuery,
   RawColumnDesc,
   RawQueryDesc,
@@ -30,11 +29,101 @@ import type {
 import type { SqloveError } from "./errors.js";
 import * as Err from "./errors.js";
 
+// ── Typed errors ────────────────────────────────────────────────────────────
+
+class PgDescribeError extends Data.TaggedError("PgDescribeError")<{
+  readonly sql: string;
+  readonly cause: unknown;
+}> {
+  get message(): string {
+    return extractMessage(this.cause);
+  }
+  get detail(): string | undefined {
+    return extractDetail(this.cause);
+  }
+}
+
+class PgQueryError extends Data.TaggedError("PgQueryError")<{
+  readonly sql: string;
+  readonly cause: unknown;
+}> {
+  get message(): string {
+    return extractMessage(this.cause);
+  }
+  get detail(): string | undefined {
+    return extractDetail(this.cause);
+  }
+}
+
+class PrefetchError extends Data.TaggedError("PrefetchError")<{
+  readonly cause: unknown;
+}> {
+  get message(): string {
+    return extractMessage(this.cause);
+  }
+}
+
+class UnsupportedTypeOID extends Data.TaggedError("UnsupportedTypeOID")<{
+  readonly context: "param" | "column";
+  readonly oid: number;
+}> {}
+
+type IntrospectError =
+  | PgDescribeError
+  | PgQueryError
+  | PrefetchError
+  | UnsupportedTypeOID;
+
+function extractMessage(cause: unknown): string {
+  if (typeof cause === "object" && cause !== null && "message" in cause) {
+    return String((cause as { message: unknown }).message);
+  }
+  return String(cause);
+}
+
+function extractDetail(cause: unknown): string | undefined {
+  if (typeof cause === "object" && cause !== null && "detail" in cause) {
+    return String((cause as { detail: unknown }).detail);
+  }
+  return undefined;
+}
+
+/** Map an IntrospectError to a user-facing SqloveError. */
+const toSqloveError = (pq: ParsedQuery, err: IntrospectError): SqloveError => {
+  switch (err._tag) {
+    case "UnsupportedTypeOID":
+      return Err.UnsupportedType(pq.file.queryName, err.oid);
+    case "PgDescribeError":
+      return Err.IntrospectionError(
+        pq.file.queryName, pq.file.filePath, err.message, err.detail,
+      );
+    case "PgQueryError":
+      return Err.IntrospectionError(
+        pq.file.queryName, pq.file.filePath, err.message, err.detail,
+      );
+    case "PrefetchError":
+      return Err.IntrospectionError(
+        pq.file.queryName, pq.file.filePath,
+        `failed to prefetch type info: ${err.message}`,
+      );
+  }
+};
+
+// ── Plan node type ──────────────────────────────────────────────────────────
+
+interface PlanNode {
+  "Join Type"?: string;
+  "Node Type"?: string;
+  Alias?: string;
+  Output?: string[];
+  Plans?: PlanNode[];
+}
+
 // ── Public API ──────────────────────────────────────────────────────────────
 
 export interface IntrospectResult {
   queries: TypedQuery[];
-  enums: EnumDef[];
+  enums: import("./types.js").EnumDef[];
   errors: SqloveError[];
 }
 
@@ -51,77 +140,22 @@ export const introspect = (
 
     const results = yield* Effect.forEach(parsedQueries, (pq) =>
       introspectOne(client, resolver, pq).pipe(
-        Effect.map((query) => ({ _tag: "ok" as const, query, pq })),
-        Effect.catchAll((err) =>
-          Effect.succeed({ _tag: "err" as const, error: toSqloveError(pq, err), pq }),
-        ),
+        Effect.mapError((err) => toSqloveError(pq, err)),
+        Effect.either,
       ),
     );
 
-    const queries: TypedQuery[] = [];
-    const errors: SqloveError[] = [];
-    for (const r of results) {
-      if (r._tag === "ok") queries.push(r.query);
-      else errors.push(r.error);
-    }
-
-    return { queries, enums: resolver.getEnums(), errors };
+    return {
+      queries: Arr.getRights(results),
+      enums: resolver.getEnums(),
+      errors: Arr.getLefts(results),
+    };
   });
 
 export function createClient(): pg.Client {
   const url = process.env["DATABASE_URL"];
   if (url) return new pg.Client({ connectionString: url });
   return new pg.Client();
-}
-
-// ── Typed errors ────────────────────────────────────────────────────────────
-
-class PgDescribeError extends Data.TaggedError("PgDescribeError")<{
-  readonly sql: string;
-  readonly cause: unknown;
-}> {}
-
-class PgQueryError extends Data.TaggedError("PgQueryError")<{
-  readonly sql: string;
-  readonly cause: unknown;
-}> {}
-
-class UnsupportedTypeOID extends Data.TaggedError("UnsupportedTypeOID")<{
-  readonly context: "param" | "column";
-  readonly oid: number;
-}> {}
-
-type IntrospectError = PgDescribeError | PgQueryError | UnsupportedTypeOID;
-
-/** Map an IntrospectError to a user-facing SqloveError. */
-const toSqloveError = (pq: ParsedQuery, err: IntrospectError): SqloveError => {
-  switch (err._tag) {
-    case "UnsupportedTypeOID":
-      return Err.UnsupportedType(pq.file.queryName, err.oid);
-    case "PgDescribeError":
-      return Err.IntrospectionError(
-        pq.file.queryName,
-        pq.file.filePath,
-        String((err.cause as any)?.message ?? err.cause),
-        (err.cause as any)?.detail,
-      );
-    case "PgQueryError":
-      return Err.IntrospectionError(
-        pq.file.queryName,
-        pq.file.filePath,
-        String((err.cause as any)?.message ?? err.cause),
-      );
-  }
-};
-
-// ── Plan node type ──────────────────────────────────────────────────────────
-
-interface PlanNode {
-  "Join Type"?: string;
-  "Node Type"?: string;
-  Alias?: string;
-  Output?: string[];
-  Plans?: PlanNode[];
 }
 
 // ── DB helpers ──────────────────────────────────────────────────────────────
@@ -153,7 +187,7 @@ const introspectOne = (
           ...raw.paramOIDs,
           ...cleanColumns.map((c) => c.dataTypeOID),
         ]),
-      catch: (cause) => new PgQueryError({ sql: "prefetch", cause }),
+      catch: (cause) => new PrefetchError({ cause }),
     });
 
     const nullable = yield* resolveNullability(client, cleanColumns, pq.file.content);
@@ -342,10 +376,10 @@ const resolveJoinNullability = (
 ): Effect.Effect<Set<number>, never> =>
   getQueryPlan(client, sql).pipe(
     Effect.map((planOpt) =>
-      Option.match(planOpt, {
-        onNone: () => new Set<number>(),
-        onSome: (plan) => nullableIndicesFromPlan(plan, columns),
-      }),
+      planOpt.pipe(
+        Option.map((plan) => nullableIndicesFromPlan(plan, columns)),
+        Option.getOrElse(() => new Set<number>()),
+      ),
     ),
   );
 
@@ -404,12 +438,6 @@ function collectAllAliases(node: PlanNode, result: Set<string>): void {
   }
 }
 
-/**
- * Extract alias prefix from an EXPLAIN Output entry.
- *   "u.name"                → "u"
- *   "\"*SELECT* 1\".amount" → "*SELECT* 1"
- *   "(expression)"          → null
- */
 function extractAliasFromOutput(ref: string): string | null {
   if (ref.startsWith('"')) {
     const closeQuote = ref.indexOf('"', 1);
@@ -489,31 +517,35 @@ const buildParams = (
   pq: ParsedQuery,
   paramNullability: Map<number, boolean>,
 ): Effect.Effect<ResolvedParam[], UnsupportedTypeOID> =>
-  Effect.forEach(paramOIDs, (oid, i) => {
-    const tsType = resolver.resolve(oid);
-    if (!tsType) return Effect.fail(new UnsupportedTypeOID({ context: "param", oid }));
-    const idx = i + 1;
-    return Effect.succeed({
-      index: idx,
-      name: pq.paramHints.get(idx) ?? `arg${idx}`,
-      oid,
-      tsType,
-      nullable: paramNullability.get(idx) ?? false,
-    });
-  });
+  Effect.forEach(paramOIDs, (oid, i) =>
+    Effect.fromNullable(resolver.resolve(oid)).pipe(
+      Effect.mapError(() => new UnsupportedTypeOID({ context: "param", oid })),
+      Effect.map((tsType) => {
+        const idx = i + 1;
+        return {
+          index: idx,
+          name: pq.paramHints.get(idx) ?? `arg${idx}`,
+          oid,
+          tsType,
+          nullable: paramNullability.get(idx) ?? false,
+        };
+      }),
+    ),
+  );
 
 const buildColumns = (
   columns: RawColumnDesc[],
   resolver: TypeResolver,
   nullable: boolean[],
 ): Effect.Effect<ResolvedColumn[], UnsupportedTypeOID> =>
-  Effect.forEach(columns, (col, i) => {
-    const tsType = resolver.resolve(col.dataTypeOID);
-    if (!tsType) return Effect.fail(new UnsupportedTypeOID({ context: "column", oid: col.dataTypeOID }));
-    return Effect.succeed({
-      name: col.name,
-      oid: col.dataTypeOID,
-      tsType,
-      nullable: nullable[i]!,
-    });
-  });
+  Effect.forEach(columns, (col, i) =>
+    Effect.fromNullable(resolver.resolve(col.dataTypeOID)).pipe(
+      Effect.mapError(() => new UnsupportedTypeOID({ context: "column", oid: col.dataTypeOID })),
+      Effect.map((tsType) => ({
+        name: col.name,
+        oid: col.dataTypeOID,
+        tsType,
+        nullable: nullable[i]!,
+      })),
+    ),
+  );

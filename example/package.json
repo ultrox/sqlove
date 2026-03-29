@@ -4,9 +4,9 @@
   "type": "module",
   "scripts": {
     "dev": "tsx --watch src/server.ts",
-    "db:migrate": "DATABASE_URL=postgresql://sqlove:sqlove@localhost:5555/sqlove_test tsx src/db/migrate.ts",
-    "sqlove": "DATABASE_URL=postgresql://sqlove:sqlove@localhost:5555/sqlove_test tsx ../src/cli.ts --src ./src",
-    "sqlove:check": "DATABASE_URL=postgresql://sqlove:sqlove@localhost:5555/sqlove_test tsx ../src/cli.ts check --src ./src"
+    "db:migrate": "DATABASE_URL=postgresql://sqlove:sqlove@localhost:5555/sqlove_dev tsx src/db/migrate.ts",
+    "sqlove": "DATABASE_URL=postgresql://sqlove:sqlove@localhost:5555/sqlove_dev tsx ../src/cli.ts --src ./src",
+    "sqlove:check": "DATABASE_URL=postgresql://sqlove:sqlove@localhost:5555/sqlove_dev tsx ../src/cli.ts check --src ./src"
   },
   "dependencies": {
     "@hono/node-server": "^1.19.11",

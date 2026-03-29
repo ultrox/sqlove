@@ -1,6 +1,9 @@
-CREATE TYPE todo_priority AS ENUM ('low', 'medium', 'high', 'urgent');
+DO $$ BEGIN
+  CREATE TYPE todo_priority AS ENUM ('low', 'medium', 'high', 'urgent');
+EXCEPTION WHEN duplicate_object THEN null;
+END $$;
 
-CREATE TABLE todo (
+CREATE TABLE IF NOT EXISTS todo (
   id serial PRIMARY KEY,
   title text NOT NULL,
   description text,

@@ -20,6 +20,7 @@ export const createAndMaybeComplete = (title: string, priority: TodoPriority) =>
       description: "",
       priority,
       shareWith: null,
+      fido: null,
     });
     yield* Effect.log(`Created: "${todo.title}" [${todo.priority}]`);
 
@@ -92,6 +93,7 @@ export const seed = Effect.gen(function* () {
       description: item.desc,
       priority: item.priority,
       shareWith: null,
+      fido: "tukac",
     });
   }
 

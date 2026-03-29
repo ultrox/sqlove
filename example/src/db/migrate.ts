@@ -10,7 +10,7 @@ async function migrate() {
   const client = new pg.Client({
     connectionString:
       process.env["DATABASE_URL"] ??
-      "postgresql://sqlove:sqlove@localhost:5555/sqlove_test",
+      "postgresql://sqlove:sqlove@localhost:5555/sqlove_dev",
   });
   await client.connect();
 
