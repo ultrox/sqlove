@@ -19,7 +19,7 @@ import { parse, validateQueryName } from "./parser.js";
 import { createClient, introspect } from "./introspector.js";
 import { generate } from "./codegen.js";
 import type { SqlFile, ParsedQuery, GeneratedModule } from "./types.js";
-import type { SqloveError } from "./errors.js";
+import type { SqloveError, WriteErr } from "./errors.js";
 import * as Err from "./errors.js";
 
 // ── Public API ───────────────────────────────────────────
@@ -38,23 +38,19 @@ export const run = (
   Effect.gen(function* () {
     const { modules, errors } = yield* buildModules(srcDir);
 
-    const writeResults = yield* Effect.forEach(
-      modules,
-      (mod) =>
-        writeIfChanged(mod).pipe(
-          Effect.catchAll((writeErr: SqloveError) => {
-            errors.push(writeErr);
-            return Effect.succeed(null);
-          }),
-        ),
-      { concurrency: 1 },
-    );
+    const written: string[] = [];
 
-    return {
-      modules,
-      written: writeResults.filter((p): p is string => p !== null),
-      errors,
-    };
+    for (const sqlTsContent of modules) {
+      const result = yield* writeIfChanged(sqlTsContent).pipe(
+        Effect.catchAll((writeErr: WriteErr) => {
+          errors.push(writeErr);
+          return Effect.succeed(null);
+        }),
+      );
+      if (result !== null) written.push(result);
+    }
+
+    return { modules, written, errors };
   });
 
 export const check = (srcDir: string) =>
@@ -64,7 +60,9 @@ export const check = (srcDir: string) =>
     const stale: string[] = [];
     for (const mod of modules) {
       const existing = yield* readExisting(mod.outputPath);
-      if (mod.source !== existing) stale.push(mod.outputPath);
+      if (mod.source !== existing) {
+        stale.push(mod.outputPath);
+      }
     }
 
     return { ok: stale.length === 0, stale, errors };
@@ -133,12 +131,12 @@ const buildModules = (srcDir: string) =>
 interface ParseResult {
   outPath: string;
   queries: ParsedQuery[];
-  errors: SqloveError[];
+  errors: Err.SqloveError[];
 }
 
 const parseModule = (outPath: string, files: SqlFile[]): ParseResult => {
   const queries: ParsedQuery[] = [];
-  const errors: SqloveError[] = [];
+  const errors: Err.SqloveError[] = [];
 
   for (const file of files) {
     const nameErr = validateQueryName(file.queryName);
@@ -157,9 +155,11 @@ const parseModule = (outPath: string, files: SqlFile[]): ParseResult => {
 };
 
 const withClient = <A>(
-  f: (client: ReturnType<typeof createClient>) => Effect.Effect<A, SqloveError>,
-): Effect.Effect<A, SqloveError> =>
-  Effect.acquireUseRelease(
+  fn: (
+    client: ReturnType<typeof createClient>,
+  ) => Effect.Effect<A, SqloveError>,
+): Effect.Effect<A, SqloveError> => {
+  return Effect.acquireUseRelease(
     Effect.tryPromise({
       try: () => {
         const c = createClient();
@@ -171,22 +171,26 @@ const withClient = <A>(
           e,
         ),
     }),
-    f,
+    fn,
     (client) => Effect.promise(() => client.end()),
   );
+};
 
 // ── Write helpers ────────────────────────────────────────
 
-const readExisting = (path: string) =>
-  Effect.tryPromise({
-    try: () => readFile(path, "utf8"),
-    catch: () => null,
-  }).pipe(Effect.catchAll(() => Effect.succeed("")));
-
-const writeIfChanged = (mod: GeneratedModule) =>
-  Effect.gen(function* () {
+/** Compares generated source against what's on disk.
+ * If identical: skip(null).
+ * If different: writes the file and returns the path it wrote to.
+ * If fail: WriteError
+ */
+const writeIfChanged = (
+  mod: GeneratedModule,
+): Effect.Effect<string | null, WriteErr, never> => {
+  return Effect.gen(function* () {
     const existing = yield* readExisting(mod.outputPath);
-    if (mod.source === existing) return null;
+    if (existing !== null && mod.source === existing) {
+      return null;
+    }
 
     yield* Effect.tryPromise({
       try: async () => {
@@ -198,3 +202,12 @@ const writeIfChanged = (mod: GeneratedModule) =>
 
     return mod.outputPath;
   });
+};
+
+const readExisting = (
+  path: string,
+): Effect.Effect<string | null, never, never> =>
+  Effect.tryPromise({
+    try: () => readFile(path, "utf8"),
+    catch: () => null,
+  }).pipe(Effect.catchAll(() => Effect.succeed(null)));
