@@ -1,5 +1,4 @@
 node_modules/
 dist/
-*.gen.ts
-example/node_modules/
-example/package-lock.json
+*.tsbuildinfo
+.DS_Store
