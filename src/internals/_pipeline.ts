@@ -162,21 +162,27 @@ const parseModule = (outPath: string, files: SqlFile[]): ParseResult => {
   return { outPath, queries, errors };
 };
 
+const p = Effect.tryPromise({
+  try: () => Promise.resolve(1),
+  catch: () => Promise.reject(2),
+});
+
 const withPgClient = <A>(
   use: (client: Client) => Effect.Effect<A, SqloveError>,
-): Effect.Effect<A, SqloveError> =>
-  Effect.acquireUseRelease(
-    Effect.tryPromise({
-      try: () => {
-        const client = createClient();
-        return client.connect().then(() => client);
-      },
-      catch: (cause: any) =>
-        Err.ConnectionError(cause.message ?? String(cause), cause),
-    }),
-    use,
-    (client) => Effect.promise(() => client.end()),
+): Effect.Effect<A, SqloveError> => {
+  const acquire = Effect.tryPromise({
+    try: () => {
+      const client = createClient();
+      return client.connect().then(() => client);
+    },
+    catch: (cause: any) =>
+      Err.ConnectionError(cause.message ?? String(cause), cause),
+  });
+
+  return Effect.acquireUseRelease(acquire, use, (client) =>
+    Effect.promise(() => client.end()),
   );
+};
 
 // ── Write helpers ────────────────────────────────────────
 
