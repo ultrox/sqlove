@@ -18,11 +18,22 @@
     "build": "tsc -p tsconfig.build.json",
     "dev": "tsc -p tsconfig.build.json --watch",
     "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
     "lint": "tsc --noEmit",
     "prepublishOnly": "npm run build"
   },
-  "files": ["dist", "README.md", "LICENSE"],
-  "keywords": ["sql", "postgres", "codegen", "type-safe", "effect"],
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "sql",
+    "postgres",
+    "codegen",
+    "type-safe",
+    "effect"
+  ],
   "license": "Apache-2.0",
   "engines": {
     "node": ">=20"
@@ -32,13 +43,14 @@
   },
   "devDependencies": {
     "@types/pg": "^8.15.4",
+    "@vitest/coverage-v8": "^3.2.4",
+    "tsx": "^4.19.4",
     "typescript": "^5.8.2",
-    "vitest": "^3.2.1",
-    "tsx": "^4.19.4"
+    "vitest": "^3.2.1"
   },
   "peerDependencies": {
-    "effect": ">=3.0.0",
     "@effect/sql": ">=0.20.0",
-    "@effect/sql-pg": ">=0.40.0"
+    "@effect/sql-pg": ">=0.40.0",
+    "effect": ">=3.0.0"
   }
 }
