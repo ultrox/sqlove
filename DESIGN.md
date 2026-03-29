@@ -203,6 +203,51 @@ In a fully Effect-based server (e.g., @effect/platform HTTP), this bridge wouldn
 
 ---
 
+### Nullability is harder than it looks
+
+"Can this column be null?" sounds simple. The answer depends on:
+
+- **Table constraints** — `NOT NULL` in `pg_attribute`. Easy.
+- **Join type** — LEFT/RIGHT/FULL makes the other side nullable. We use `EXPLAIN (GENERIC_PLAN)` to walk the plan tree and collect aliases from nullable sides. Same approach as Squirrel.
+- **Aggregates** — `max()` returns null on zero rows, `count()` never does, `coalesce()` removes null. We can't detect this — it requires understanding SQL function semantics.
+- **JSONB operators** — `->>'key'` returns null if key doesn't exist. Expression column, `tableOID = 0`, invisible to `pg_attribute`.
+- **CTE columns** — lose their table metadata. `tableOID = 0`.
+- **Runtime parameter values** — `WHERE ($1 IS NULL OR c.id = $1)` changes join behavior depending on the value. `GENERIC_PLAN` handles this correctly by not optimizing for specific values.
+
+We went through several iterations on the join detection:
+
+1. **Regex on SQL** — broke on schema-qualified names (`public.orders`), subqueries, CTEs, and comments containing `LEFT JOIN`.
+2. **EXPLAIN with NULL params** — plan collapsed (`WHERE id = NULL` → always false, no join nodes).
+3. **EXPLAIN with dummy typed values** — Postgres optimized LEFT→INNER when filtering on nullable side.
+4. **EXPLAIN (GENERIC_PLAN)** — Postgres 16+ option. Gives the plan without knowing parameter values. No collapse, no optimization artifacts. Same approach Squirrel uses. This is what we ship.
+
+For the cases we can't detect (aggregates, JSONB, CTEs), we added `?` and `!` suffixes on column aliases — same escape hatch as Squirrel:
+
+```sql
+-- Force nullable: tool can't know max() returns null on empty
+SELECT max(o.created_at) AS "last_order_at?"
+FROM users u LEFT JOIN orders o ON o.user_id = u.id
+
+-- Force non-null: you know bio is always set for active users
+SELECT bio AS "bio!" FROM users WHERE active = true
+```
+
+The suffix is stripped from the column name. Postgres never sees it. One character, explicit, no magic.
+
+### Snapshot tests need guardrails
+
+Snapshots capture regressions ("did the output change?") but not correctness ("is the output right?"). A wrong snapshot accepted once passes forever.
+
+We layer three kinds of tests:
+
+1. **Targeted assertions** (`complex-queries.test.ts`, `joins.test.ts`) — "this column IS nullable", "this param IS camelCase". Catches specific bugs.
+2. **Structural invariants** (`fixtures.test.ts`) — "every Schema.Class has a matching function", "no raw $N leaks into templates", "no ?/! suffixes in field names". Catches classes of bugs.
+3. **Snapshot** (`fixtures.test.ts`) — "nothing changed". Catches regressions.
+
+The invariant checks run alongside the snapshot. If someone accepts a wrong snapshot, the invariants catch it. If the invariants pass but the output is subtly wrong, the targeted assertions catch it.
+
+---
+
 ## Things we explicitly chose NOT to do
 
 - **No config file.** Convention over configuration. `DATABASE_URL` and `sql/` directories. That's it.

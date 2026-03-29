@@ -192,6 +192,33 @@ Falls back to `arg1`, `arg2` when it can't infer.
 
 ---
 
+## Nullability overrides — `?` and `!`
+
+sqlove detects nullable columns from table constraints and join types. But some cases can't be detected automatically:
+
+- `max()` on a LEFT JOIN — returns null when no rows match
+- `metadata->>'key'` — null if key doesn't exist
+- CTE columns — lose table metadata
+
+For these, add `?` or `!` to the column alias:
+
+```sql
+-- Force nullable: max() can return null on empty LEFT JOIN
+SELECT max(o.created_at) AS "last_order_at?"
+FROM users u LEFT JOIN orders o ON o.user_id = u.id
+GROUP BY u.id
+
+-- Force nullable: jsonb key might not exist
+SELECT metadata->>'department' AS "department?" FROM users
+
+-- Force non-null: you know bio is always set here
+SELECT bio AS "bio!" FROM users WHERE active = true
+```
+
+The suffix is stripped from the generated field name. Postgres never sees it. One character, explicit, no magic. Same approach as [Squirrel](https://github.com/giacomocavalieri/squirrel).
+
+---
+
 ## Type mapping
 
 | Postgres | Schema | TypeScript | Notes |
