@@ -1,3 +1,24 @@
+/*
+ * Talks to Postgres. No query is ever executed.
+ *
+ * Uses the extended query protocol: Parse + Describe.
+ * Parse sends the SQL, Postgres parses it.
+ * Describe returns param OIDs + column descriptors.
+ * We never send Bind or Execute.
+ *
+ * DescribeSubmittable: pg-compatible Submittable that
+ * plugs into pg's Client query queue. Sends Parse →
+ * Describe → Sync, collects parameterDescription +
+ * rowDescription events (not routed by pg Client,
+ * so we listen on the connection directly).
+ *
+ * Nullability: pg_attribute.attnotnull for columns.
+ * For INSERT/SET params, cross-reference the target
+ * column's nullability to mark params as nullable.
+ *
+ * Enums/arrays/domains: delegated to TypeResolver.
+ */
+
 import pg from "pg";
 import { TypeResolver } from "./type-map.js";
 import type {

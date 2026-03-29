@@ -1,3 +1,16 @@
+/*
+ * Orchestrator. Wires all phases together:
+ *
+ *   discover → parse → introspect → codegen → write
+ *
+ * Errors accumulate — one bad query doesn't kill the rest.
+ * Only writes when content actually changed (diff check).
+ *
+ * Two modes:
+ *   run()   — generate files, return what was written
+ *   check() — compare generated vs existing, return stale
+ */
+
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { discover } from "./discovery.js";

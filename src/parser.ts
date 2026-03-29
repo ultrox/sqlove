@@ -1,3 +1,19 @@
+/*
+ * Pure functions. No I/O, no DB.
+ *
+ * Takes a SqlFile, returns a ParsedQuery:
+ *   - extracts leading -- comments → docComment
+ *   - strips comments from SQL body
+ *   - counts $N params (highest N wins)
+ *   - infers param names from SQL context
+ *     WHERE email = $1 → "email"
+ *     INSERT INTO t (a,b) VALUES ($1,$2) → "a","b"
+ *     SET name = $2 → "name"
+ *   - detects INSERT/SET params (for nullability)
+ *
+ * Also validates query names (must be snake_case).
+ */
+
 import type { ParsedQuery, SqlFile } from "./types.js";
 
 /**

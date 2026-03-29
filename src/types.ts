@@ -1,3 +1,10 @@
+/*
+ * Data structures flowing through the pipeline.
+ * No logic. Every other module imports from here.
+ *
+ * Flow: SqlFile → ParsedQuery → TypedQuery → GeneratedModule
+ */
+
 /** Raw SQL file discovered on disk */
 export interface SqlFile {
   readonly filePath: string;

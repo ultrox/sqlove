@@ -1,3 +1,15 @@
+/*
+ * Walks srcDir looking for sql/ directories.
+ * Each sql/ dir → one generated module.
+ *
+ * Convention (same as Squirrel):
+ *   src/todos/sql/*.sql → src/todos/sql.ts
+ *
+ * Returns Map<outputPath, SqlFile[]>.
+ * Skips dotfiles, node_modules, empty dirs.
+ * Files sorted by name for deterministic output.
+ */
+
 import { readdir, readFile } from "node:fs/promises";
 import { join, relative, dirname, basename, extname } from "node:path";
 import type { SqlFile } from "./types.js";

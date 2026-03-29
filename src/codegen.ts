@@ -1,3 +1,26 @@
+/*
+ * Pure function. Takes TypedQuery[], emits TypeScript.
+ * No I/O, no DB — just string building.
+ *
+ * Output shape per module:
+ *   imports (Effect, Schema, SqlClient, SqlError)
+ *   enums   (Schema.Literal for each pg enum)
+ *   per query:
+ *     Schema.Class row type (if returns columns)
+ *     const (no params) or function (has params)
+ *
+ * Key transforms:
+ *   file name snake_case → camelCase function
+ *   column snake_case → camelCase via Schema.fromKey
+ *   param snake_case → camelCase in params object
+ *   $N in SQL → ${params.camelName} in template
+ *   nullable cols → Schema.NullOr(...)
+ *   nullable params → T | null
+ *   mutations without RETURNING → Effect<void>
+ *
+ * Queries sorted alphabetically. Deterministic output.
+ */
+
 import type { EnumDef, TypedQuery, GeneratedModule } from "./types.js";
 
 const HEADER = `// ============================================================

@@ -1,3 +1,8 @@
+/*
+ * Public API re-exports for library/programmatic use.
+ * CLI uses pipeline directly.
+ */
+
 export { run, check } from "./pipeline.js";
 export { discover } from "./discovery.js";
 export { parse, validateQueryName } from "./parser.js";

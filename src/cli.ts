@@ -1,4 +1,14 @@
 #!/usr/bin/env node
+/*
+ * CLI entry point. Thin shell over pipeline.
+ *
+ * sqlove           → run(), generate files
+ * sqlove check     → check(), exit 1 if stale
+ * sqlove --src X   → override source directory
+ *
+ * Parses argv manually. No framework,
+ * we hate dependencies, my god we meaning me :).
+ */
 
 import { resolve } from "node:path";
 import { run, check } from "./pipeline.js";
@@ -88,7 +98,9 @@ async function main() {
     // Print per-query results
     for (const mod of result.modules) {
       for (const q of mod.queries) {
-        console.log(`  ${GREEN}✓${RESET} ${q.file.modulePath}/sql/${q.file.queryName}.sql`);
+        console.log(
+          `  ${GREEN}✓${RESET} ${q.file.modulePath}/sql/${q.file.queryName}.sql`,
+        );
       }
     }
 
@@ -98,21 +110,28 @@ async function main() {
     }
 
     // Summary
-    const totalQueries = result.modules.reduce((s, m) => s + m.queries.length, 0);
+    const totalQueries = result.modules.reduce(
+      (s, m) => s + m.queries.length,
+      0,
+    );
     const moduleCount = result.modules.length;
     console.log("");
 
     if (result.written.length > 0) {
       console.log(
         `Generated ${moduleCount} module(s) (${totalQueries} queries)` +
-          (result.errors.length > 0 ? ` with ${result.errors.length} error(s)` : "") +
-          `.`
+          (result.errors.length > 0
+            ? ` with ${result.errors.length} error(s)`
+            : "") +
+          `.`,
       );
       for (const f of result.written) {
         console.log(`  → ${f}`);
       }
     } else if (totalQueries > 0) {
-      console.log(`${totalQueries} queries up-to-date across ${moduleCount} module(s).`);
+      console.log(
+        `${totalQueries} queries up-to-date across ${moduleCount} module(s).`,
+      );
     }
 
     if (result.errors.length > 0) process.exit(1);

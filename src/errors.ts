@@ -1,3 +1,11 @@
+/*
+ * Tagged union of every error sqlove can produce.
+ * Constructors build them, formatError renders them
+ * to ANSI-colored terminal output.
+ * No error is ever thrown — they accumulate in arrays
+ * so one bad query doesn't kill the whole run.
+ */
+
 export type SqloveError =
   | {
       readonly _tag: "FileReadError";

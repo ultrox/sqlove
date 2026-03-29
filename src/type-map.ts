@@ -1,3 +1,16 @@
+/*
+ * Maps Postgres type OIDs → TypeScript/Schema types.
+ *
+ * Builtins are hardcoded (int4→number, text→string, etc).
+ * Unknown OIDs are resolved at runtime via pg_type.
+ * Enums: pg_type(typtype='e') → pg_enum → Schema.Literal.
+ * Arrays: typelem gives element OID, wrap in Schema.Array.
+ * Domains: follow typbasetype to the real type.
+ *
+ * TypeResolver caches everything per session.
+ * Call prefetch() with OIDs, then resolve() is sync.
+ */
+
 import type pg from "pg";
 import type { TsType, EnumDef } from "./types.js";
 
