@@ -112,8 +112,6 @@ async function resolveNullability(
   client: pg.Client,
   columns: RawColumnDesc[],
   sql: string,
-  paramCount: number,
-  paramOIDs: number[],
 ): Promise<boolean[]> {
   const nullable = new Array<boolean>(columns.length).fill(false);
   const tableCols = columns
@@ -142,7 +140,7 @@ async function resolveNullability(
 
   // Outer join nullability: columns from the nullable side
   // of LEFT/RIGHT/FULL JOINs are always nullable
-  const joinNullability = await resolveJoinNullability(client, columns, sql, paramCount, paramOIDs);
+  const joinNullability = await resolveJoinNullability(client, columns, sql);
   for (let i = 0; i < columns.length; i++) {
     if (joinNullability.has(i)) {
       nullable[i] = true;
@@ -161,92 +159,24 @@ async function resolveNullability(
  *
  *   PREPARE → EXPLAIN (VERBOSE, FORMAT JSON) EXECUTE → walk plan tree
  */
-/** Step 1: get the query plan from Postgres via PREPARE + EXPLAIN.
- *  Tries NULL args first. If the plan collapses (One-Time Filter),
- *  retries with typed dummy values derived from param OIDs. */
+/**
+ * Get the generic query plan via EXPLAIN (GENERIC_PLAN).
+ * Postgres 16+ supports this as a direct EXPLAIN option —
+ * no PREPARE, no dummy values, no plan collapse.
+ * Same approach as Squirrel.
+ */
 async function getQueryPlan(
   client: pg.Client,
   sql: string,
-  paramCount: number,
-  paramOIDs: number[],
 ): Promise<any | null> {
-  const probeName = `_sqlove_explain_${Date.now()}`;
   try {
-    // Use a transaction + force_generic_plan so Postgres
-    // doesn't optimize based on specific param values
-    // (e.g., converting LEFT JOIN to INNER when filtering
-    // on the nullable side, or collapsing WHERE x = NULL).
-    await client.query(`BEGIN`);
-    await client.query(`SET LOCAL plan_cache_mode = force_generic_plan`);
-    await client.query(`PREPARE ${probeName} AS ${sql}`);
-
-    const plan = await executeExplain(client, probeName, paramCount, null);
-    return plan;
+    const { rows } = await client.query(
+      `EXPLAIN (FORMAT JSON, VERBOSE, GENERIC_PLAN) ${sql}`,
+    );
+    return (rows[0] as any)?.["QUERY PLAN"]?.[0]?.Plan ?? null;
   } catch {
+    // EXPLAIN can fail (mutations, DO blocks, etc).
     return null;
-  } finally {
-    await client.query(`DEALLOCATE ${probeName}`).catch(() => {});
-    await client.query(`COMMIT`).catch(() => {
-      client.query(`ROLLBACK`).catch(() => {});
-    });
-  }
-}
-
-async function executeExplain(
-  client: pg.Client,
-  probeName: string,
-  paramCount: number,
-  paramOIDs: number[] | null,
-): Promise<any | null> {
-  let dummyArgs = "";
-  if (paramCount > 0) {
-    if (paramOIDs) {
-      // Use typed dummy values that won't collapse the plan
-      const vals = paramOIDs.map((oid) => dummyValueForOid(oid));
-      dummyArgs = `(${vals.join(",")})`;
-    } else {
-      dummyArgs = `(${Array(paramCount).fill("NULL").join(",")})`;
-    }
-  }
-  const { rows } = await client.query(
-    `EXPLAIN (VERBOSE, FORMAT JSON) EXECUTE ${probeName}${dummyArgs}`,
-  );
-  return (rows[0] as any)?.["QUERY PLAN"]?.[0]?.Plan ?? null;
-}
-
-/** Detect a plan that collapsed or lost join info due to NULL params */
-function isCollapsedPlan(plan: any): boolean {
-  if (plan["One-Time Filter"] === "false") return true;
-  if (plan["Node Type"] === "Result" && !plan.Plans) return true;
-  // Plan exists but has no join nodes — NULL may have eliminated joins
-  if (!hasJoinNode(plan)) return true;
-  return false;
-}
-
-function hasJoinNode(node: any): boolean {
-  if (node["Join Type"]) return true;
-  for (const child of node.Plans ?? []) {
-    if (hasJoinNode(child)) return true;
-  }
-  return false;
-}
-
-/** Return a dummy literal value for a given Postgres OID that won't cause type errors.
- *  These are never actually inserted — only used for EXPLAIN plan generation. */
-function dummyValueForOid(oid: number): string {
-  switch (oid) {
-    case 16: return "'f'";           // bool
-    case 17: return "'\\x00'";       // bytea
-    case 20: case 21: case 23:       // int8, int2, int4
-    case 26:                         // oid
-    case 700: case 701:              // float4, float8
-      return "0";
-    case 1700: return "'0'";         // numeric
-    case 2950: return "'00000000-0000-0000-0000-000000000000'"; // uuid
-    case 1082: return "'2000-01-01'";        // date
-    case 1083: case 1266: return "'00:00'";  // time, timetz
-    case 1114: case 1184: return "'2000-01-01'"; // timestamp, timestamptz
-    default: return "''";            // text, varchar, and everything else
   }
 }
 
@@ -280,10 +210,8 @@ async function resolveJoinNullability(
   client: pg.Client,
   columns: RawColumnDesc[],
   sql: string,
-  paramCount: number,
-  paramOIDs: number[],
 ): Promise<Set<number>> {
-  const plan = await getQueryPlan(client, sql, paramCount, paramOIDs);
+  const plan = await getQueryPlan(client, sql);
   if (!plan) return new Set();
   return nullableIndicesFromPlan(plan, columns);
 }
@@ -432,7 +360,7 @@ export async function introspect(
       await resolver.prefetch(allOids);
 
       const nullable = await resolveNullability(
-        client, raw.columns, pq.file.content, pq.paramCount, raw.paramOIDs,
+        client, raw.columns, pq.file.content,
       );
 
       // Resolve param nullability for INSERT/SET params
