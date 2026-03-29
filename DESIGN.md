@@ -155,16 +155,51 @@ We chose Effect because:
 
 But this means sqlove is only useful if you're already using Effect. That's a real trade-off. If there's demand, we could add a `--target plain` flag that generates simple `async/await` code with `pg` directly.
 
-### The `ManagedRuntime` bridge in Hono handlers
+### The `ManagedRuntime` bridge in Hono handlers — and the `runSql` mistake
 
-Every Hono handler does:
+Our first attempt at bridging Effect with Hono was a `runSql` wrapper:
+
 ```ts
-const result = await runtime.runPromise(someEffect)
+import { Effect, Layer, Redacted } from "effect"
+import { PgClient } from "@effect/sql-pg"
+import { SqlClient } from "@effect/sql/SqlClient"
+import type { SqlError } from "@effect/sql/SqlError"
+
+const DbLayer = PgClient.layer({
+  url: Redacted.make(process.env.DATABASE_URL!),
+})
+
+function runSql<A>(effect: Effect.Effect<A, SqlError, SqlClient>): Promise<A> {
+  return Effect.runPromise(Effect.provide(effect, DbLayer))
+}
+
+// Every handler:
+app.get("/todos", async (c) => {
+  const rows = await runSql(listTodos)
+  return c.json(rows)
+})
 ```
 
-This is the bridge between Effect-land and Promise-land. It's one line per handler but it's still ceremony. In a fully Effect-based server (e.g., @effect/platform HTTP), this wouldn't exist.
+This worked but it was ugly. You had to import 6 things (`Effect`, `Layer`, `Redacted`, `PgClient`, `SqlClient`, `SqlError`) just to set up one wrapper function. The `runSql` name was meaningless — it's just "run this effect with the DB layer." And `Effect.provide(effect, DbLayer)` inside every call meant the layer was being evaluated per request.
 
-We accept this because Hono is a real-world framework people use. The bridge is minimal and obvious. If you're building a pure Effect app with @effect/platform, you'd skip Hono entirely and compose Effects all the way up.
+The fix was `ManagedRuntime`:
+
+```ts
+import { ManagedRuntime, Redacted } from "effect"
+import { PgClient } from "@effect/sql-pg"
+
+const runtime = ManagedRuntime.make(
+  PgClient.layer({ url: Redacted.make(process.env.DATABASE_URL!) })
+)
+
+app.get("/todos", async (c) =>
+  c.json(await runtime.runPromise(listTodos))
+)
+```
+
+Three imports instead of six. The runtime is built once with the layer baked in. Each handler is one line — `runtime.runPromise(effect)`. No wrapper function, no re-providing the layer. The bridge is still there (Effect → Promise) but it's minimal and obvious.
+
+In a fully Effect-based server (e.g., @effect/platform HTTP), this bridge wouldn't exist at all. You'd compose Effects all the way up. We accept the bridge because Hono is a real-world framework people use.
 
 ---
 
