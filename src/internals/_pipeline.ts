@@ -21,6 +21,7 @@ import { generate } from "./codegen.js";
 import type { SqlFile, ParsedQuery, GeneratedModule } from "./types.js";
 import type { SqloveError, WriteErr } from "./errors.js";
 import * as Err from "./errors.js";
+import { Client } from "pg";
 
 // ── Public API ───────────────────────────────────────────
 
@@ -97,8 +98,8 @@ const buildModules = (
         errors: parseErrors,
       };
 
-    // Introspect + generate — scoped client
-    const { generated, errors: introErrors } = yield* withClient((client) =>
+    // Introspect postgres + generate — scoped client
+    const { generated, errors: introErrors } = yield* withPgClient((client) =>
       Effect.gen(function* () {
         const results: GeneratedModule[] = [];
         const errors: SqloveError[] = [];
@@ -116,7 +117,9 @@ const buildModules = (
           });
 
           errors.push(...result.errors);
-          if (result.queries.length === 0) continue;
+          if (result.queries.length === 0) {
+            continue;
+          }
 
           results.push(generate(outPath, result.queries, result.enums));
         }
@@ -159,27 +162,21 @@ const parseModule = (outPath: string, files: SqlFile[]): ParseResult => {
   return { outPath, queries, errors };
 };
 
-const withClient = <A>(
-  fn: (
-    client: ReturnType<typeof createClient>,
-  ) => Effect.Effect<A, SqloveError>,
-): Effect.Effect<A, SqloveError> => {
-  return Effect.acquireUseRelease(
+const withPgClient = <A>(
+  use: (client: Client) => Effect.Effect<A, SqloveError>,
+): Effect.Effect<A, SqloveError> =>
+  Effect.acquireUseRelease(
     Effect.tryPromise({
       try: () => {
-        const c = createClient();
-        return c.connect().then(() => c);
+        const client = createClient();
+        return client.connect().then(() => client);
       },
-      catch: (e: any) =>
-        Err.ConnectionError(
-          `${e.message ?? String(e)}\nSet DATABASE_URL or PGHOST/PGPORT/PGUSER/PGDATABASE/PGPASSWORD env vars.`,
-          e,
-        ),
+      catch: (cause: any) =>
+        Err.ConnectionError(cause.message ?? String(cause), cause),
     }),
-    fn,
+    use,
     (client) => Effect.promise(() => client.end()),
   );
-};
 
 // ── Write helpers ────────────────────────────────────────
 
