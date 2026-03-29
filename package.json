@@ -1,0 +1,44 @@
+{
+  "name": "sqlove",
+  "version": "0.1.0",
+  "description": "Type-safe SQL in TypeScript, powered by Effect",
+  "type": "module",
+  "bin": {
+    "sqlove": "./dist/cli.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "dev": "tsc -p tsconfig.build.json --watch",
+    "test": "vitest run",
+    "lint": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "files": ["dist", "README.md", "LICENSE"],
+  "keywords": ["sql", "postgres", "codegen", "type-safe", "effect"],
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "pg": "^8.16.0"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.15.4",
+    "typescript": "^5.8.2",
+    "vitest": "^3.2.1",
+    "tsx": "^4.19.4"
+  },
+  "peerDependencies": {
+    "effect": ">=3.0.0",
+    "@effect/sql": ">=0.20.0",
+    "@effect/sql-pg": ">=0.40.0"
+  }
+}

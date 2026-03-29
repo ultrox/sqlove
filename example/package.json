@@ -1,0 +1,24 @@
+{
+  "name": "sqlove-example",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx --watch src/server.ts",
+    "db:migrate": "DATABASE_URL=postgresql://appuser:secret@localhost:5432/sqlove_test tsx src/db/migrate.ts",
+    "sqlove": "DATABASE_URL=postgresql://appuser:secret@localhost:5432/sqlove_test tsx ../src/cli.ts --src ./src",
+    "sqlove:check": "DATABASE_URL=postgresql://appuser:secret@localhost:5432/sqlove_test tsx ../src/cli.ts check --src ./src"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.19.11",
+    "effect": "^3.21.0",
+    "@effect/platform": "^0.96.0",
+    "@effect/experimental": "^0.60.0",
+    "@effect/sql": "^0.51.0",
+    "@effect/sql-pg": "^0.52.0",
+    "hono": "^4.12.9"
+  },
+  "devDependencies": {
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.2"
+  }
+}
