@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import pg from "pg";
 
-const DATABASE_URL = "postgresql://appuser:secret@localhost:5432/sqlove_test";
+const DATABASE_URL = "postgresql://sqlove:sqlove@localhost:5555/sqlove_test";
 const CLI = join(import.meta.dirname, "../src/cli.ts");
 const TMP = join(tmpdir(), `sqlove-cli-${Date.now()}`);
 

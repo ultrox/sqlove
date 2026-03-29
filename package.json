@@ -19,7 +19,7 @@
     "dev": "tsc -p tsconfig.build.json --watch",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
-    "lint": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
     "prepublishOnly": "npm run build"
   },
   "files": [

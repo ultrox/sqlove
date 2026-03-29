@@ -111,6 +111,7 @@ function describeRaw(client: pg.Client, sql: string): Promise<RawQueryDesc> {
 async function resolveNullability(
   client: pg.Client,
   columns: RawColumnDesc[],
+  sql: string,
 ): Promise<boolean[]> {
   const nullable = new Array<boolean>(columns.length).fill(false);
   const tableCols = columns
@@ -119,6 +120,7 @@ async function resolveNullability(
 
   if (tableCols.length === 0) return nullable;
 
+  // Column-level NOT NULL from pg_attribute
   const pairs = tableCols.map((c) => `(${c.tableOID}, ${c.columnID})`);
   const { rows } = await client.query<{
     attrelid: number;
@@ -135,6 +137,67 @@ async function resolveNullability(
   for (const c of tableCols) {
     nullable[c.idx] = !(notNull.get(`${c.tableOID}:${c.columnID}`) ?? false);
   }
+
+  // Outer join nullability: columns from the nullable side
+  // of LEFT/RIGHT/FULL JOINs are always nullable
+  const nullableOids = await resolveJoinNullableOids(client, sql);
+  for (const c of tableCols) {
+    if (nullableOids.has(c.tableOID)) {
+      nullable[c.idx] = true;
+    }
+  }
+
+  return nullable;
+}
+
+/**
+ * Parse SQL for outer joins, resolve table names to OIDs,
+ * return the set of table OIDs that are on the nullable side.
+ *
+ * LEFT JOIN t   → t is nullable
+ * RIGHT JOIN t  → FROM table is nullable
+ * FULL JOIN t   → both sides nullable
+ */
+async function resolveJoinNullableOids(
+  client: pg.Client,
+  sql: string,
+): Promise<Set<number>> {
+  const names = parseJoinNullableTables(sql);
+  if (names.size === 0) return new Set();
+
+  const { rows } = await client.query<{ oid: number }>(
+    `SELECT oid::int FROM pg_class WHERE relname = ANY($1)`,
+    [[...names]],
+  );
+
+  return new Set(rows.map((r) => r.oid));
+}
+
+function parseJoinNullableTables(sql: string): Set<string> {
+  const nullable = new Set<string>();
+  const norm = sql.replace(/\s+/g, " ");
+
+  // LEFT [OUTER] JOIN <table>
+  let m;
+  const leftRe = /left\s+(?:outer\s+)?join\s+(\w+)/gi;
+  while ((m = leftRe.exec(norm)) !== null) {
+    nullable.add(m[1]!.toLowerCase());
+  }
+
+  // RIGHT [OUTER] JOIN — FROM table becomes nullable
+  if (/right\s+(?:outer\s+)?join/i.test(norm)) {
+    const fromMatch = /\bfrom\s+(\w+)/i.exec(norm);
+    if (fromMatch) nullable.add(fromMatch[1]!.toLowerCase());
+  }
+
+  // FULL [OUTER] JOIN <table> — both sides
+  const fullRe = /full\s+(?:outer\s+)?join\s+(\w+)/gi;
+  while ((m = fullRe.exec(norm)) !== null) {
+    nullable.add(m[1]!.toLowerCase());
+    const fromMatch = /\bfrom\s+(\w+)/i.exec(norm);
+    if (fromMatch) nullable.add(fromMatch[1]!.toLowerCase());
+  }
+
   return nullable;
 }
 
@@ -228,7 +291,7 @@ export async function introspect(
       ];
       await resolver.prefetch(allOids);
 
-      const nullable = await resolveNullability(client, raw.columns);
+      const nullable = await resolveNullability(client, raw.columns, pq.file.content);
 
       // Resolve param nullability for INSERT/SET params
       const paramNullability = await resolveParamNullability(client, raw, pq);

@@ -1,0 +1,16 @@
+services:
+  postgres:
+    image: postgres:17
+    ports:
+      - "5555:5432"
+    environment:
+      POSTGRES_USER: sqlove
+      POSTGRES_PASSWORD: sqlove
+      POSTGRES_DB: sqlove_test
+    volumes:
+      - ./test/fixtures/schema.sql:/docker-entrypoint-initdb.d/schema.sql
+    healthcheck:
+      test: pg_isready -U sqlove
+      interval: 2s
+      timeout: 5s
+      retries: 5

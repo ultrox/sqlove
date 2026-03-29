@@ -11,7 +11,7 @@ import { generate } from "../src/internals/codegen.js";
 import { introspect, createClient } from "../src/internals/introspector.js";
 import type { SqlFile, ParsedQuery } from "../src/internals/types.js";
 
-const DATABASE_URL = "postgresql://appuser:secret@localhost:5432/sqlove_test";
+const DATABASE_URL = "postgresql://sqlove:sqlove@localhost:5555/sqlove_test";
 const TMP = join(tmpdir(), `sqlove-perf-${Date.now()}`);
 
 // ── Helpers ─────────────────────────────────────────────────────────────────

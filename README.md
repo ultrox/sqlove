@@ -365,6 +365,20 @@ The tagline says it best: **instead of trying to hide SQL, embrace it and leave 
 
 ---
 
+## Development
+
+```bash
+git clone https://github.com/ultrox/sqlove
+cd sqlove
+npm install
+docker compose up -d --wait   # Postgres on :5555, schema auto-applied
+npm run typecheck              # type check
+npm test                       # 106 tests, all real, zero mocks
+npm run test:coverage          # coverage report
+```
+
+---
+
 ## License
 
 Apache-2.0

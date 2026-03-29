@@ -21,7 +21,7 @@ const runtime = ManagedRuntime.make(
   PgClient.layer({
     url: Redacted.make(
       process.env["DATABASE_URL"] ??
-        "postgresql://appuser:secret@localhost:5432/sqlove_test",
+        "postgresql://sqlove:sqlove@localhost:5555/sqlove_test",
     ),
   }),
 );

@@ -6,7 +6,7 @@ import pg from "pg";
 import { Effect } from "effect";
 import { run, check } from "../src/internals/_pipeline.js";
 
-const DATABASE_URL = "postgresql://appuser:secret@localhost:5432/sqlove_test";
+const DATABASE_URL = "postgresql://sqlove:sqlove@localhost:5555/sqlove_test";
 const TMP = join(tmpdir(), `sqlove-pipeline-${Date.now()}`);
 
 beforeAll(async () => {

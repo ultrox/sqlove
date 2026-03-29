@@ -4,7 +4,7 @@ import { introspect } from "../src/internals/introspector.js";
 import { parse } from "../src/internals/parser.js";
 import type { SqlFile } from "../src/internals/types.js";
 
-const DATABASE_URL = "postgresql://appuser:secret@localhost:5432/sqlove_test";
+const DATABASE_URL = "postgresql://sqlove:sqlove@localhost:5555/sqlove_test";
 let client: pg.Client;
 
 function file(name: string, content: string): SqlFile {
@@ -127,6 +127,64 @@ describe("introspect", () => {
     expect(params[0]!.tsType.tsAnnotation).toBe("string");        // text
     expect(params[1]!.tsType.tsAnnotation).toBe("boolean");       // bool
     expect(params[2]!.tsType.tsAnnotation).toBe("TodoPriority");  // enum
+  });
+
+  it("LEFT JOIN columns are nullable", async () => {
+    const pq = parse(file("join_q", `
+      SELECT users.name, orders.total
+      FROM users
+      LEFT JOIN orders ON orders.user_id = users.id
+    `));
+    const result = await introspect(client, [pq]);
+    const cols = result.queries[0]!.columns;
+
+    const byName = Object.fromEntries(cols.map((c) => [c.name, c]));
+    // users.name comes from the left side — NOT NULL, stays not null
+    expect(byName["name"]!.nullable).toBe(false);
+    // orders.total comes from the RIGHT side of LEFT JOIN — can be null
+    expect(byName["total"]!.nullable).toBe(true);
+  });
+
+  it("RIGHT JOIN makes left-side columns nullable", async () => {
+    const pq = parse(file("right_join_q", `
+      SELECT users.name, orders.total
+      FROM users
+      RIGHT JOIN orders ON orders.user_id = users.id
+    `));
+    const result = await introspect(client, [pq]);
+    const cols = result.queries[0]!.columns;
+    const byName = Object.fromEntries(cols.map((c) => [c.name, c]));
+
+    expect(byName["name"]!.nullable).toBe(true);   // left side of RIGHT JOIN
+    expect(byName["total"]!.nullable).toBe(false);  // right side, NOT NULL
+  });
+
+  it("FULL JOIN makes both sides nullable", async () => {
+    const pq = parse(file("full_join_q", `
+      SELECT users.name, orders.total
+      FROM users
+      FULL JOIN orders ON orders.user_id = users.id
+    `));
+    const result = await introspect(client, [pq]);
+    const cols = result.queries[0]!.columns;
+    const byName = Object.fromEntries(cols.map((c) => [c.name, c]));
+
+    expect(byName["name"]!.nullable).toBe(true);
+    expect(byName["total"]!.nullable).toBe(true);
+  });
+
+  it("INNER JOIN does not make columns nullable", async () => {
+    const pq = parse(file("inner_join_q", `
+      SELECT users.name, orders.total
+      FROM users
+      INNER JOIN orders ON orders.user_id = users.id
+    `));
+    const result = await introspect(client, [pq]);
+    const cols = result.queries[0]!.columns;
+    const byName = Object.fromEntries(cols.map((c) => [c.name, c]));
+
+    expect(byName["name"]!.nullable).toBe(false);
+    expect(byName["total"]!.nullable).toBe(false);
   });
 
   it("resolves timestamp columns as Date", async () => {
