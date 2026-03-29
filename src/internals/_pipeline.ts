@@ -62,15 +62,26 @@ export const check = (srcDir: string) =>
 // ── Shared pipeline ──────────────────────────────────────
 
 /** Discover → parse → introspect → generate. No filesystem writes. */
-const buildModules = (srcDir: string) =>
+type BuildModuleReturn = {
+  modules: GeneratedModule[];
+  errors: SqloveError[];
+};
+
+const buildModules = (
+  srcDir: string,
+): Effect.Effect<BuildModuleReturn, SqloveError, never> =>
   Effect.gen(function* () {
     const discovered = yield* Effect.tryPromise({
       try: () => discover(srcDir),
       catch: (cause) => Err.FileReadError(srcDir, cause),
     });
 
-    if (discovered.size === 0)
-      return { modules: [] as GeneratedModule[], errors: [] as SqloveError[] };
+    if (discovered.size === 0) {
+      return {
+        modules: [],
+        errors: [],
+      } satisfies BuildModuleReturn;
+    }
 
     // Parse phase — collect errors, keep going
     const parseResults = [...discovered.entries()].map(([outPath, files]) =>
@@ -81,7 +92,10 @@ const buildModules = (srcDir: string) =>
     const validModules = parseResults.filter((r) => r.queries.length > 0);
 
     if (validModules.length === 0)
-      return { modules: [] as GeneratedModule[], errors: parseErrors };
+      return {
+        modules: [],
+        errors: parseErrors,
+      } satisfies BuildModuleReturn;
 
     // Introspect + generate — scoped client
     const { generated, errors: introErrors } = yield* withClient((client) =>
