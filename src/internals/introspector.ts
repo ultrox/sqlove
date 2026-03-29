@@ -19,6 +19,7 @@ import pg from "pg";
 import { Effect, Option, Data, Array as Arr } from "effect";
 import { TypeResolver } from "./type-map.js";
 import type {
+  EnumDef,
   ParsedQuery,
   RawColumnDesc,
   RawQueryDesc,
@@ -94,9 +95,6 @@ const toSqloveError = (pq: ParsedQuery, err: IntrospectError): SqloveError => {
     case "UnsupportedTypeOID":
       return Err.UnsupportedType(pq.file.queryName, err.oid);
     case "PgDescribeError":
-      return Err.IntrospectionError(
-        pq.file.queryName, pq.file.filePath, err.message, err.detail,
-      );
     case "PgQueryError":
       return Err.IntrospectionError(
         pq.file.queryName, pq.file.filePath, err.message, err.detail,
@@ -123,7 +121,7 @@ interface PlanNode {
 
 export interface IntrospectResult {
   queries: TypedQuery[];
-  enums: import("./types.js").EnumDef[];
+  enums: EnumDef[];
   errors: SqloveError[];
 }
 
@@ -346,6 +344,7 @@ const resolveNullability = (
     }
 
     // Layer 2: outer join nullability from EXPLAIN plan
+    // resolveJoinNullability is infallible — EXPLAIN failures → empty set
     const joinNullable = yield* resolveJoinNullability(client, columns, sql);
     for (const idx of joinNullable) {
       nullable[idx] = true;
@@ -453,38 +452,39 @@ function extractAliasFromOutput(ref: string): string | null {
 
 // ── Param nullability for INSERT/SET ────────────────────────────────────────
 
+/** Find the OID of the table targeted by an INSERT/UPDATE. */
+const findTableOID = (
+  client: pg.Client,
+  raw: RawQueryDesc,
+  sql: string,
+): Effect.Effect<Option.Option<number>, PgQueryError> =>
+  Effect.gen(function* () {
+    // Try RETURNING columns first — they carry the table OID
+    for (const col of raw.columns) {
+      if (col.tableOID !== 0) return Option.some(col.tableOID);
+    }
+    // Fall back to parsing table name from SQL
+    const tableMatch = /\b(?:INSERT\s+INTO|UPDATE)\s+(\w+)/i.exec(sql);
+    if (!tableMatch) return Option.none();
+
+    const { rows } = yield* queryEffect<{ oid: number }>(
+      client,
+      `SELECT oid::int FROM pg_class WHERE relname = $1`,
+      [tableMatch[1]],
+    );
+    return Option.fromNullable(rows[0]?.oid);
+  });
+
 const resolveParamNullability = (
   client: pg.Client,
   raw: RawQueryDesc,
   pq: ParsedQuery,
 ): Effect.Effect<Map<number, boolean>, PgQueryError> =>
   Effect.gen(function* () {
-    const result = new Map<number, boolean>();
+    if (pq.paramInsertOrSet.size === 0) return new Map<number, boolean>();
 
-    const insertOrSetParams = [...pq.paramInsertOrSet];
-    if (insertOrSetParams.length === 0) return result;
-
-    let tableOID = 0;
-    for (const col of raw.columns) {
-      if (col.tableOID !== 0) {
-        tableOID = col.tableOID;
-        break;
-      }
-    }
-
-    if (tableOID === 0) {
-      const tableMatch = /\b(?:INSERT\s+INTO|UPDATE)\s+(\w+)/i.exec(pq.sql);
-      if (tableMatch) {
-        const { rows } = yield* queryEffect<{ oid: number }>(
-          client,
-          `SELECT oid::int FROM pg_class WHERE relname = $1`,
-          [tableMatch[1]],
-        );
-        if (rows[0]) tableOID = rows[0].oid;
-      }
-    }
-
-    if (tableOID === 0) return result;
+    const tableOID = yield* findTableOID(client, raw, pq.sql);
+    if (Option.isNone(tableOID)) return new Map<number, boolean>();
 
     const { rows } = yield* queryEffect<{
       attname: string;
@@ -493,19 +493,17 @@ const resolveParamNullability = (
       client,
       `SELECT attname, attnotnull FROM pg_attribute
        WHERE attrelid = $1 AND attnum > 0 AND NOT attisdropped`,
-      [tableOID],
+      [tableOID.value],
     );
 
-    const colNullable = new Map<string, boolean>();
-    for (const r of rows) colNullable.set(r.attname, !r.attnotnull);
-
-    for (const idx of insertOrSetParams) {
+    const colNullable = new Map(rows.map((r) => [r.attname, !r.attnotnull]));
+    const result = new Map<number, boolean>();
+    for (const idx of pq.paramInsertOrSet) {
       const colName = pq.paramHints.get(idx);
       if (colName && colNullable.has(colName)) {
         result.set(idx, colNullable.get(colName)!);
       }
     }
-
     return result;
   });
 
