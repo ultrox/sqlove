@@ -112,11 +112,10 @@ describe("complex queries — correctness", () => {
       expect(cols["role"]!.tsType.enumDef).toBeDefined();
     });
 
-    // max() on LEFT JOIN can return null when no rows match.
-    // Expression column (tableOID=0) — tool can't detect this.
-    // Workaround: use ? suffix on the alias.
-    // See suffix_nullable.sql for the pattern.
-    it.todo("aggregates on LEFT JOIN are nullable (max can return null) — use ? suffix");
+    it("max() on LEFT JOIN forced nullable with ? suffix", async () => {
+      const { cols } = await describe_("user_dashboard");
+      expect(cols["last_order_at"]!.nullable).toBe(true);
+    });
 
     it("array column resolves", async () => {
       const { cols } = await describe_("user_dashboard");
@@ -128,9 +127,10 @@ describe("complex queries — correctness", () => {
   // ── category_tree ──────────────────────────────────────
 
   describe("category_tree (recursive CTE)", () => {
-    // CTE columns have tableOID=0 — tool can't check pg_attribute.
-    // Workaround: use ? suffix on the alias.
-    it.todo("parent_id is nullable (top-level categories have no parent) — use ? suffix");
+    it("CTE column forced nullable with ? suffix", async () => {
+      const { cols } = await describe_("category_tree");
+      expect(cols["parent_id"]!.nullable).toBe(true);
+    });
 
     it("product_count from LEFT JOIN aggregate is not nullable (coalesce)", async () => {
       const { cols } = await describe_("category_tree");
@@ -194,10 +194,12 @@ describe("complex queries — correctness", () => {
   // ── jsonb_query ────────────────────────────────────────
 
   describe("jsonb_query", () => {
-    // ->> extracts text from jsonb. tableOID=0 (expression).
-    // Key might not exist → null. Tool can't detect this.
-    // Workaround: use ? suffix on the alias.
-    it.todo("jsonb-extracted text columns are nullable — use ? suffix");
+    it("jsonb ->> forced nullable with ? suffix", async () => {
+      const { cols } = await describe_("jsonb_query");
+      expect(cols["department"]!.nullable).toBe(true);
+      expect(cols["level"]!.nullable).toBe(true);
+      expect(cols["salary"]!.nullable).toBe(true);
+    });
 
     it("cast from jsonb produces correct type", async () => {
       const { cols } = await describe_("jsonb_query");

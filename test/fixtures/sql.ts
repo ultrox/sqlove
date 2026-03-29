@@ -65,7 +65,7 @@ export class CategoryTreeRow extends Schema.Class<CategoryTreeRow>("CategoryTree
   id: Schema.Number,
   name: Schema.String,
   depth: Schema.Number,
-  parentId: Schema.propertySignature(Schema.Number).pipe(Schema.fromKey("parent_id")),
+  parentId: Schema.propertySignature(Schema.NullOr(Schema.Number)).pipe(Schema.fromKey("parent_id")),
   productCount: Schema.propertySignature(Schema.Number).pipe(Schema.fromKey("product_count")),
 }) {}
 
@@ -93,7 +93,7 @@ SELECT
   ct.id,
   ct.name,
   ct.depth,
-  ct.parent_id,
+  ct.parent_id AS "parent_id?",
   count(p.id)::int AS product_count
 FROM cat_tree ct
 LEFT JOIN products p ON p.category_id = ct.id
@@ -514,9 +514,9 @@ LEFT JOIN (
 export class JsonbQueryRow extends Schema.Class<JsonbQueryRow>("JsonbQueryRow")({
   id: Schema.Number,
   name: Schema.String,
-  department: Schema.String,
-  level: Schema.String,
-  salary: Schema.String,
+  department: Schema.NullOr(Schema.String),
+  level: Schema.NullOr(Schema.String),
+  salary: Schema.NullOr(Schema.String),
 }) {}
 
 /**
@@ -532,9 +532,9 @@ export const jsonbQuery = (
     sql<JsonbQueryRow>`SELECT
   id,
   name,
-  metadata->>'department' AS department,
-  metadata->>'level' AS level,
-  (metadata->>'salary')::numeric AS salary
+  metadata->>'department' AS "department?",
+  metadata->>'level' AS "level?",
+  (metadata->>'salary')::numeric AS "salary?"
 FROM users
 WHERE metadata @> ${params.arg1}::jsonb`
   ));
@@ -951,7 +951,7 @@ export class UserDashboardRow extends Schema.Class<UserDashboardRow>("UserDashbo
   tags: Schema.Array(Schema.String),
   orderCount: Schema.propertySignature(Schema.Number).pipe(Schema.fromKey("order_count")),
   totalSpent: Schema.propertySignature(Schema.String).pipe(Schema.fromKey("total_spent")),
-  lastOrderAt: Schema.propertySignature(Schema.DateFromString).pipe(Schema.fromKey("last_order_at")),
+  lastOrderAt: Schema.propertySignature(Schema.NullOr(Schema.DateFromString)).pipe(Schema.fromKey("last_order_at")),
 }) {}
 
 /**
@@ -972,7 +972,7 @@ export const userDashboard = (
   u.tags,
   count(o.id)::int AS order_count,
   coalesce(sum(o.total), 0)::numeric(10,2) AS total_spent,
-  max(o.created_at) AS last_order_at
+  max(o.created_at) AS "last_order_at?"
 FROM users u
 LEFT JOIN orders o ON o.user_id = u.id AND o.status != 'cancelled'
 WHERE u.id = ${params.id}
