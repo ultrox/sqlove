@@ -250,6 +250,49 @@ describe("codegen", () => {
     });
   });
 
+  describe("param names are camelCase", () => {
+    it("converts snake_case param names to camelCase", () => {
+      const src = gen([query({
+        name: "create_thing",
+        sql: "INSERT INTO t (share_with, created_by) VALUES ($1, $2) RETURNING id",
+        params: [
+          { index: 1, name: "share_with", oid: 25, tsType: STR, nullable: false },
+          { index: 2, name: "created_by", oid: 25, tsType: STR, nullable: false },
+        ],
+        columns: [{ name: "id", oid: 23, tsType: NUM, nullable: false }],
+      })]);
+      expect(src).toContain("readonly shareWith: string");
+      expect(src).toContain("readonly createdBy: string");
+      // SQL column names stay snake_case, only param keys are camelCase
+      expect(src).not.toContain("readonly share_with");
+      expect(src).not.toContain("readonly created_by");
+    });
+
+    it("uses camelCase param names in SQL template interpolation", () => {
+      const src = gen([query({
+        name: "update_thing",
+        sql: "UPDATE t SET share_with = $1 WHERE id = $2",
+        params: [
+          { index: 1, name: "share_with", oid: 25, tsType: STR, nullable: false },
+          { index: 2, name: "id", oid: 23, tsType: NUM, nullable: false },
+        ],
+        isMutation: true,
+      })]);
+      expect(src).toContain("${params.shareWith}");
+      expect(src).toContain("${params.id}");
+    });
+
+    it("single-word params stay unchanged", () => {
+      const src = gen([query({
+        name: "by_id",
+        sql: "SELECT id FROM t WHERE id = $1",
+        params: [{ index: 1, name: "id", oid: 23, tsType: NUM, nullable: false }],
+        columns: [{ name: "id", oid: 23, tsType: NUM, nullable: false }],
+      })]);
+      expect(src).toContain("readonly id: number");
+    });
+  });
+
   describe("row class shape", () => {
     it("generates Schema.Class with correct field schemas", () => {
       const src = gen([query({
