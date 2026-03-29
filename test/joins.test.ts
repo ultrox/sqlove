@@ -1,3 +1,4 @@
+import { Effect } from "effect";
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import pg from "pg";
 import { parse } from "../src/internals/parser.js";
@@ -26,7 +27,7 @@ function loadFixture(name: string): SqlFile {
 
 async function describeColumns(name: string) {
   const pq = parse(loadFixture(name));
-  const result = await introspect(client, [pq]);
+  const result = await Effect.runPromise(introspect(client, [pq]));
   expect(result.errors).toHaveLength(0);
   const cols = result.queries[0]!.columns;
   return Object.fromEntries(cols.map((c) => [c.name, c]));

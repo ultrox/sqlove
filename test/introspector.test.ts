@@ -1,3 +1,4 @@
+import { Effect } from "effect";
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import pg from "pg";
 import { introspect } from "../src/internals/introspector.js";
@@ -40,7 +41,7 @@ afterAll(async () => {
 describe("introspect", () => {
   it("resolves parameter types from the query", async () => {
     const pq = parse(file("by_title", "SELECT id FROM todo WHERE title = $1"));
-    const result = await introspect(client, [pq]);
+    const result = await Effect.runPromise(introspect(client, [pq]));
 
     expect(result.errors).toHaveLength(0);
     expect(result.queries).toHaveLength(1);
@@ -50,7 +51,7 @@ describe("introspect", () => {
 
   it("resolves return column types", async () => {
     const pq = parse(file("get_todo", "SELECT id, title, done, description FROM todo WHERE id = $1"));
-    const result = await introspect(client, [pq]);
+    const result = await Effect.runPromise(introspect(client, [pq]));
     const cols = result.queries[0]!.columns;
 
     expect(cols).toHaveLength(4);
@@ -64,7 +65,7 @@ describe("introspect", () => {
 
   it("detects nullable columns", async () => {
     const pq = parse(file("nulls", "SELECT title, description FROM todo LIMIT 1"));
-    const result = await introspect(client, [pq]);
+    const result = await Effect.runPromise(introspect(client, [pq]));
     const cols = result.queries[0]!.columns;
 
     const byName = Object.fromEntries(cols.map((c) => [c.name, c]));
@@ -74,7 +75,7 @@ describe("introspect", () => {
 
   it("resolves enum types with variants", async () => {
     const pq = parse(file("priorities", "SELECT priority FROM todo LIMIT 1"));
-    const result = await introspect(client, [pq]);
+    const result = await Effect.runPromise(introspect(client, [pq]));
 
     expect(result.enums).toHaveLength(1);
     expect(result.enums[0]!.pgName).toBe("todo_priority");
@@ -87,7 +88,7 @@ describe("introspect", () => {
 
   it("marks queries without RETURNING as mutations", async () => {
     const pq = parse(file("del", "DELETE FROM todo WHERE id = $1"));
-    const result = await introspect(client, [pq]);
+    const result = await Effect.runPromise(introspect(client, [pq]));
 
     expect(result.queries[0]!.isMutation).toBe(true);
     expect(result.queries[0]!.columns).toHaveLength(0);
@@ -95,7 +96,7 @@ describe("introspect", () => {
 
   it("marks queries with RETURNING as non-mutations", async () => {
     const pq = parse(file("ins", "INSERT INTO todo (title) VALUES ($1) RETURNING id"));
-    const result = await introspect(client, [pq]);
+    const result = await Effect.runPromise(introspect(client, [pq]));
 
     expect(result.queries[0]!.isMutation).toBe(false);
     expect(result.queries[0]!.columns.length).toBeGreaterThan(0);
@@ -104,7 +105,7 @@ describe("introspect", () => {
   it("collects errors for bad SQL without crashing", async () => {
     const good = parse(file("good", "SELECT id FROM todo LIMIT 1"));
     const bad = parse(file("bad", "SELECT FROM WHERE"));
-    const result = await introspect(client, [good, bad]);
+    const result = await Effect.runPromise(introspect(client, [good, bad]));
 
     // Good query still succeeds
     expect(result.queries).toHaveLength(1);
@@ -120,7 +121,7 @@ describe("introspect", () => {
       SELECT id FROM todo
       WHERE title = $1 AND done = $2 AND priority = $3::todo_priority
     `));
-    const result = await introspect(client, [pq]);
+    const result = await Effect.runPromise(introspect(client, [pq]));
     const params = result.queries[0]!.params;
 
     expect(params).toHaveLength(3);
@@ -134,7 +135,7 @@ describe("introspect", () => {
 
   it("resolves timestamp columns as Date", async () => {
     const pq = parse(file("ts", "SELECT created_at FROM todo LIMIT 1"));
-    const result = await introspect(client, [pq]);
+    const result = await Effect.runPromise(introspect(client, [pq]));
 
     expect(result.queries[0]!.columns[0]!.tsType.tsAnnotation).toBe("Date");
     expect(result.queries[0]!.columns[0]!.tsType.schema).toBe("Schema.DateFromString");

@@ -1,25 +1,22 @@
 /*
  * Talks to Postgres. No query is ever executed.
  *
- * Uses the extended query protocol: Parse + Describe.
- * Parse sends the SQL, Postgres parses it.
- * Describe returns param OIDs + column descriptors.
- * We never send Bind or Execute.
+ * Two introspection methods:
+ *   1. Parse + Describe (extended query protocol)
+ *      → param OIDs + column descriptors
+ *   2. EXPLAIN (GENERIC_PLAN)
+ *      → query plan tree for join nullability
  *
- * DescribeSubmittable: pg-compatible Submittable that
- * plugs into pg's Client query queue. Sends Parse →
- * Describe → Sync, collects parameterDescription +
- * rowDescription events (not routed by pg Client,
- * so we listen on the connection directly).
- *
- * Nullability: pg_attribute.attnotnull for columns.
- * For INSERT/SET params, cross-reference the target
- * column's nullability to mark params as nullable.
+ * Nullability is resolved in layers:
+ *   - pg_attribute.attnotnull for table columns
+ *   - EXPLAIN plan tree for outer join sides
+ *   - ?/! column alias suffixes as user overrides
  *
  * Enums/arrays/domains: delegated to TypeResolver.
  */
 
 import pg from "pg";
+import { Effect, Option, Data } from "effect";
 import { TypeResolver } from "./type-map.js";
 import type {
   EnumDef,
@@ -33,10 +30,157 @@ import type {
 import type { SqloveError } from "./errors.js";
 import * as Err from "./errors.js";
 
-// ── Submittable for Parse + Describe ────────────────────────────────────────
-// Uses pg's extended query protocol to introspect a query without executing.
-// Implements the Submittable interface so it plays nicely with pg's Client
-// query queue.
+// ── Public API ──────────────────────────────────────────────────────────────
+
+export interface IntrospectResult {
+  queries: TypedQuery[];
+  enums: EnumDef[];
+  errors: SqloveError[];
+}
+
+/**
+ * Introspect all parsed queries. Errors accumulate —
+ * one bad query doesn't kill the rest.
+ */
+export const introspect = (
+  client: pg.Client,
+  parsedQueries: ParsedQuery[],
+): Effect.Effect<IntrospectResult, never> =>
+  Effect.gen(function* () {
+    const resolver = new TypeResolver(client);
+
+    const results = yield* Effect.forEach(parsedQueries, (pq) =>
+      introspectOne(client, resolver, pq).pipe(
+        Effect.map((query) => ({ _tag: "ok" as const, query, pq })),
+        Effect.catchAll((err) =>
+          Effect.succeed({ _tag: "err" as const, error: toSqloveError(pq, err), pq }),
+        ),
+      ),
+    );
+
+    const queries: TypedQuery[] = [];
+    const errors: SqloveError[] = [];
+    for (const r of results) {
+      if (r._tag === "ok") queries.push(r.query);
+      else errors.push(r.error);
+    }
+
+    return { queries, enums: resolver.getEnums(), errors };
+  });
+
+export function createClient(): pg.Client {
+  const url = process.env["DATABASE_URL"];
+  if (url) return new pg.Client({ connectionString: url });
+  return new pg.Client();
+}
+
+// ── Typed errors ────────────────────────────────────────────────────────────
+
+class PgDescribeError extends Data.TaggedError("PgDescribeError")<{
+  readonly sql: string;
+  readonly cause: unknown;
+}> {}
+
+class PgQueryError extends Data.TaggedError("PgQueryError")<{
+  readonly sql: string;
+  readonly cause: unknown;
+}> {}
+
+class UnsupportedTypeOID extends Data.TaggedError("UnsupportedTypeOID")<{
+  readonly context: "param" | "column";
+  readonly oid: number;
+}> {}
+
+type IntrospectError = PgDescribeError | PgQueryError | UnsupportedTypeOID;
+
+/** Map an IntrospectError to a user-facing SqloveError. */
+const toSqloveError = (pq: ParsedQuery, err: IntrospectError): SqloveError => {
+  switch (err._tag) {
+    case "UnsupportedTypeOID":
+      return Err.UnsupportedType(pq.file.queryName, err.oid);
+    case "PgDescribeError":
+      return Err.IntrospectionError(
+        pq.file.queryName,
+        pq.file.filePath,
+        String((err.cause as any)?.message ?? err.cause),
+        (err.cause as any)?.detail,
+      );
+    case "PgQueryError":
+      return Err.IntrospectionError(
+        pq.file.queryName,
+        pq.file.filePath,
+        String((err.cause as any)?.message ?? err.cause),
+      );
+  }
+};
+
+// ── Plan node type ──────────────────────────────────────────────────────────
+
+interface PlanNode {
+  "Join Type"?: string;
+  "Node Type"?: string;
+  Alias?: string;
+  Output?: string[];
+  Plans?: PlanNode[];
+}
+
+// ── DB helpers ──────────────────────────────────────────────────────────────
+
+const queryEffect = <T extends pg.QueryResultRow>(
+  client: pg.Client,
+  sql: string,
+  params?: unknown[],
+) =>
+  Effect.tryPromise({
+    try: () => client.query<T>(sql, params),
+    catch: (cause) => new PgQueryError({ sql, cause }),
+  });
+
+// ── Introspect one query ────────────────────────────────────────────────────
+
+const introspectOne = (
+  client: pg.Client,
+  resolver: TypeResolver,
+  pq: ParsedQuery,
+): Effect.Effect<TypedQuery, IntrospectError> =>
+  Effect.gen(function* () {
+    const raw = yield* describeRaw(client, pq.file.content);
+    const { cleanColumns, nullOverrides } = applyColumnOverrides(raw.columns);
+
+    yield* Effect.tryPromise({
+      try: () =>
+        resolver.prefetch([
+          ...raw.paramOIDs,
+          ...cleanColumns.map((c) => c.dataTypeOID),
+        ]),
+      catch: (cause) => new PgQueryError({ sql: "prefetch", cause }),
+    });
+
+    const nullable = yield* resolveNullability(client, cleanColumns, pq.file.content);
+    for (const [idx, forced] of nullOverrides) {
+      nullable[idx] = forced;
+    }
+
+    const paramNullability = yield* resolveParamNullability(client, raw, pq);
+    const params = yield* buildParams(raw.paramOIDs, resolver, pq, paramNullability);
+    const columns = yield* buildColumns(cleanColumns, resolver, nullable);
+
+    // isMutation: no columns returned (INSERT/UPDATE/DELETE without RETURNING).
+    // DO blocks also return zero columns but aren't mutations —
+    // acceptable since DO blocks won't be in sql/ files.
+    const isMutation = raw.columns.length === 0;
+
+    return {
+      file: pq.file,
+      docComment: pq.docComment,
+      sql: pq.sql,
+      params,
+      columns,
+      isMutation,
+    } satisfies TypedQuery;
+  });
+
+// ── Parse + Describe (extended query protocol) ──────────────────────────────
 
 class DescribeSubmittable {
   private paramOIDs: number[] = [];
@@ -100,92 +244,115 @@ class DescribeSubmittable {
   handleCommandComplete() {}
 }
 
-function describeRaw(client: pg.Client, sql: string): Promise<RawQueryDesc> {
-  return new Promise((resolve, reject) => {
-    (client as any).query(new DescribeSubmittable(sql, resolve, reject));
+const describeRaw = (
+  client: pg.Client,
+  sql: string,
+): Effect.Effect<RawQueryDesc, PgDescribeError> =>
+  Effect.tryPromise({
+    try: () =>
+      new Promise<RawQueryDesc>((resolve, reject) => {
+        (client as any).query(new DescribeSubmittable(sql, resolve, reject));
+      }),
+    catch: (cause) => new PgDescribeError({ sql, cause }),
   });
+
+// ── Column override: ?/! suffixes (pure) ────────────────────────────────────
+
+function applyColumnOverrides(columns: RawColumnDesc[]): {
+  cleanColumns: RawColumnDesc[];
+  nullOverrides: Map<number, boolean>;
+} {
+  const nullOverrides = new Map<number, boolean>();
+  const cleanColumns = columns.map((col, i) => {
+    if (col.name.endsWith("?")) {
+      nullOverrides.set(i, true);
+      return { ...col, name: col.name.slice(0, -1) };
+    }
+    if (col.name.endsWith("!")) {
+      nullOverrides.set(i, false);
+      return { ...col, name: col.name.slice(0, -1) };
+    }
+    return col;
+  });
+  return { cleanColumns, nullOverrides };
 }
 
-// ── Nullability via pg_attribute ────────────────────────────────────────────
+// ── Nullability: pg_attribute + EXPLAIN ─────────────────────────────────────
 
-async function resolveNullability(
+const resolveNullability = (
   client: pg.Client,
   columns: RawColumnDesc[],
   sql: string,
-): Promise<boolean[]> {
-  const nullable = new Array<boolean>(columns.length).fill(false);
-  const tableCols = columns
-    .map((c, i) => ({ ...c, idx: i }))
-    .filter((c) => c.tableOID !== 0 && c.columnID !== 0);
+): Effect.Effect<boolean[], PgQueryError> =>
+  Effect.gen(function* () {
+    const nullable = new Array<boolean>(columns.length).fill(false);
+    const tableCols = columns
+      .map((c, i) => ({ ...c, idx: i }))
+      .filter((c) => c.tableOID !== 0 && c.columnID !== 0);
 
-  if (tableCols.length === 0) return nullable;
+    if (tableCols.length === 0) return nullable;
 
-  // Column-level NOT NULL from pg_attribute
-  const pairs = tableCols.map((c) => `(${c.tableOID}, ${c.columnID})`);
-  const { rows } = await client.query<{
-    attrelid: number;
-    attnum: number;
-    attnotnull: boolean;
-  }>(
-    `SELECT attrelid::int, attnum::int, attnotnull
-     FROM pg_attribute WHERE (attrelid, attnum) IN (${pairs.join(",")})`,
-  );
+    // Layer 1: column-level NOT NULL from pg_attribute
+    const pairs = tableCols.map((c) => `(${c.tableOID}, ${c.columnID})`);
+    const { rows } = yield* queryEffect<{
+      attrelid: number;
+      attnum: number;
+      attnotnull: boolean;
+    }>(
+      client,
+      `SELECT attrelid::int, attnum::int, attnotnull
+       FROM pg_attribute WHERE (attrelid, attnum) IN (${pairs.join(",")})`,
+    );
 
-  const notNull = new Map<string, boolean>();
-  for (const r of rows) notNull.set(`${r.attrelid}:${r.attnum}`, r.attnotnull);
+    const notNull = new Map<string, boolean>();
+    for (const r of rows) notNull.set(`${r.attrelid}:${r.attnum}`, r.attnotnull);
 
-  for (const c of tableCols) {
-    nullable[c.idx] = !(notNull.get(`${c.tableOID}:${c.columnID}`) ?? false);
-  }
-
-  // Outer join nullability: columns from the nullable side
-  // of LEFT/RIGHT/FULL JOINs are always nullable
-  const joinNullability = await resolveJoinNullability(client, columns, sql);
-  for (let i = 0; i < columns.length; i++) {
-    if (joinNullability.has(i)) {
-      nullable[i] = true;
+    for (const c of tableCols) {
+      nullable[c.idx] = !(notNull.get(`${c.tableOID}:${c.columnID}`) ?? false);
     }
-  }
 
-  return nullable;
-}
+    // Layer 2: outer join nullability from EXPLAIN plan
+    const joinNullable = yield* resolveJoinNullability(client, columns, sql);
+    for (const idx of joinNullable) {
+      nullable[idx] = true;
+    }
 
-/**
- * Use EXPLAIN to detect which result columns are on the nullable
- * side of outer joins. Returns a set of column indices (0-based).
- *
- * Postgres resolves aliases, subqueries, CTEs, schema-qualified
- * names, and ignores comments — no regex needed.
- *
- *   PREPARE → EXPLAIN (VERBOSE, FORMAT JSON) EXECUTE → walk plan tree
- */
-/**
- * Get the generic query plan via EXPLAIN (GENERIC_PLAN).
- * Postgres 16+ supports this as a direct EXPLAIN option —
- * no PREPARE, no dummy values, no plan collapse.
- * Same approach as Squirrel.
- */
-async function getQueryPlan(
+    return nullable;
+  });
+
+// ── EXPLAIN-based join nullability ──────────────────────────────────────────
+
+const getQueryPlan = (
   client: pg.Client,
   sql: string,
-): Promise<any | null> {
-  try {
-    const { rows } = await client.query(
-      `EXPLAIN (FORMAT JSON, VERBOSE, GENERIC_PLAN) ${sql}`,
-    );
-    return (rows[0] as any)?.["QUERY PLAN"]?.[0]?.Plan ?? null;
-  } catch {
-    // EXPLAIN can fail (mutations, DO blocks, etc).
-    return null;
-  }
-}
+): Effect.Effect<Option.Option<PlanNode>, never> =>
+  queryEffect(client, `EXPLAIN (FORMAT JSON, VERBOSE, GENERIC_PLAN) ${sql}`).pipe(
+    Effect.map((result) =>
+      Option.fromNullable(
+        (result.rows[0] as any)?.["QUERY PLAN"]?.[0]?.Plan as PlanNode | undefined,
+      ),
+    ),
+    Effect.orElseSucceed(() => Option.none()),
+  );
 
-/**
- * Step 2: pure function — walk the plan tree, return which
- * column indices are on the nullable side of outer joins.
- */
+const resolveJoinNullability = (
+  client: pg.Client,
+  columns: RawColumnDesc[],
+  sql: string,
+): Effect.Effect<Set<number>, never> =>
+  getQueryPlan(client, sql).pipe(
+    Effect.map((planOpt) =>
+      Option.match(planOpt, {
+        onNone: () => new Set<number>(),
+        onSome: (plan) => nullableIndicesFromPlan(plan, columns),
+      }),
+    ),
+  );
+
+// ── Plan tree walkers (pure, no DB) ─────────────────────────────────────────
+
 function nullableIndicesFromPlan(
-  plan: any,
+  plan: PlanNode,
   columns: RawColumnDesc[],
 ): Set<number> {
   const result = new Set<number>();
@@ -194,7 +361,7 @@ function nullableIndicesFromPlan(
   collectNullableAliases(plan, nullableAliases);
   if (nullableAliases.size === 0) return result;
 
-  const output: string[] = plan.Output ?? [];
+  const output = plan.Output ?? [];
   for (let i = 0; i < output.length && i < columns.length; i++) {
     const alias = extractAliasFromOutput(output[i]!);
     if (alias && nullableAliases.has(alias)) {
@@ -205,36 +372,23 @@ function nullableIndicesFromPlan(
   return result;
 }
 
-/** Combine both steps. */
-async function resolveJoinNullability(
-  client: pg.Client,
-  columns: RawColumnDesc[],
-  sql: string,
-): Promise<Set<number>> {
-  const plan = await getQueryPlan(client, sql);
-  if (!plan) return new Set();
-  return nullableIndicesFromPlan(plan, columns);
-}
-
-// ── Plan tree walkers (pure, no DB) ──────────────────────
-
 /**
- * Walk plan tree. At join nodes, collect aliases from the nullable side.
- *   Left  → Inner child aliases are nullable
- *   Right → Outer child aliases are nullable
- *   Full  → both sides' aliases are nullable
+ * At join nodes, collect aliases from the nullable side:
+ *   Left  → Inner child is nullable
+ *   Right → Outer child is nullable
+ *   Full  → both sides nullable
  */
-function collectNullableAliases(node: any, result: Set<string>): void {
-  const joinType: string | undefined = node["Join Type"];
-  const plans: any[] = node.Plans ?? [];
+function collectNullableAliases(node: PlanNode, result: Set<string>): void {
+  const joinType = node["Join Type"];
+  const plans = node.Plans ?? [];
 
   if (joinType && plans.length === 2) {
     const [outer, inner] = plans;
     if (joinType === "Left" || joinType === "Full") {
-      collectAllAliases(inner, result);
+      collectAllAliases(inner!, result);
     }
     if (joinType === "Right" || joinType === "Full") {
-      collectAllAliases(outer, result);
+      collectAllAliases(outer!, result);
     }
   }
 
@@ -243,7 +397,7 @@ function collectNullableAliases(node: any, result: Set<string>): void {
   }
 }
 
-function collectAllAliases(node: any, result: Set<string>): void {
+function collectAllAliases(node: PlanNode, result: Set<string>): void {
   if (node.Alias) result.add(node.Alias);
   for (const child of node.Plans ?? []) {
     collectAllAliases(child, result);
@@ -269,187 +423,97 @@ function extractAliasFromOutput(ref: string): string | null {
   return null;
 }
 
-// ── Param nullability for INSERT/SET ─────────────────────────────────────────
-// If a param is used in INSERT VALUES or SET and the target column is nullable,
-// the param should accept null.
+// ── Param nullability for INSERT/SET ────────────────────────────────────────
 
-async function resolveParamNullability(
+const resolveParamNullability = (
   client: pg.Client,
   raw: RawQueryDesc,
   pq: ParsedQuery,
-): Promise<Map<number, boolean>> {
-  const result = new Map<number, boolean>();
+): Effect.Effect<Map<number, boolean>, PgQueryError> =>
+  Effect.gen(function* () {
+    const result = new Map<number, boolean>();
 
-  // Only check params that are in INSERT/SET context
-  const insertOrSetParams = [...pq.paramInsertOrSet];
-  if (insertOrSetParams.length === 0) return result;
+    const insertOrSetParams = [...pq.paramInsertOrSet];
+    if (insertOrSetParams.length === 0) return result;
 
-  // We need a table to look up columns. Get it from the first column with a tableOID,
-  // or parse the INSERT INTO <table> from the SQL.
-  let tableOID = 0;
-  for (const col of raw.columns) {
-    if (col.tableOID !== 0) {
-      tableOID = col.tableOID;
-      break;
-    }
-  }
-
-  // If no tableOID from columns (e.g., INSERT without RETURNING), parse table name from SQL
-  if (tableOID === 0) {
-    const tableMatch = /\b(?:INSERT\s+INTO|UPDATE)\s+(\w+)/i.exec(pq.sql);
-    if (tableMatch) {
-      const { rows } = await client.query<{ oid: number }>(
-        `SELECT oid::int FROM pg_class WHERE relname = $1`,
-        [tableMatch[1]],
-      );
-      if (rows[0]) tableOID = rows[0].oid;
-    }
-  }
-
-  if (tableOID === 0) return result;
-
-  // Get all column nullability for this table
-  const { rows } = await client.query<{
-    attname: string;
-    attnotnull: boolean;
-  }>(
-    `SELECT attname, attnotnull FROM pg_attribute
-     WHERE attrelid = $1 AND attnum > 0 AND NOT attisdropped`,
-    [tableOID],
-  );
-
-  const colNullable = new Map<string, boolean>();
-  for (const r of rows) {
-    colNullable.set(r.attname, !r.attnotnull);
-  }
-
-  // For each INSERT/SET param, check if its target column is nullable
-  for (const idx of insertOrSetParams) {
-    const colName = pq.paramHints.get(idx);
-    if (colName && colNullable.has(colName)) {
-      result.set(idx, colNullable.get(colName)!);
-    }
-  }
-
-  return result;
-}
-
-// ── High-level introspection ────────────────────────────────────────────────
-
-export interface IntrospectResult {
-  queries: TypedQuery[];
-  enums: EnumDef[];
-  errors: SqloveError[];
-}
-
-export async function introspect(
-  client: pg.Client,
-  parsedQueries: ParsedQuery[],
-): Promise<IntrospectResult> {
-  const resolver = new TypeResolver(client);
-  const queries: TypedQuery[] = [];
-  const errors: SqloveError[] = [];
-
-  for (const pq of parsedQueries) {
-    try {
-      const raw = await describeRaw(client, pq.file.content);
-
-      // Strip ?/! nullability suffixes from column names.
-      // name?  → force nullable
-      // name!  → force non-null
-      const nullOverrides = new Map<number, boolean>();
-      const cleanColumns = raw.columns.map((col, i) => {
-        if (col.name.endsWith("?")) {
-          nullOverrides.set(i, true);
-          return { ...col, name: col.name.slice(0, -1) };
-        }
-        if (col.name.endsWith("!")) {
-          nullOverrides.set(i, false);
-          return { ...col, name: col.name.slice(0, -1) };
-        }
-        return col;
-      });
-
-      const allOids = [
-        ...raw.paramOIDs,
-        ...cleanColumns.map((c) => c.dataTypeOID),
-      ];
-      await resolver.prefetch(allOids);
-
-      const nullable = await resolveNullability(
-        client, cleanColumns, pq.file.content,
-      );
-
-      // Apply ?/! overrides
-      for (const [idx, forced] of nullOverrides) {
-        nullable[idx] = forced;
+    let tableOID = 0;
+    for (const col of raw.columns) {
+      if (col.tableOID !== 0) {
+        tableOID = col.tableOID;
+        break;
       }
+    }
 
-      // Resolve param nullability for INSERT/SET params
-      const paramNullability = await resolveParamNullability(client, raw, pq);
-
-      const params: ResolvedParam[] = raw.paramOIDs.map((oid, i) => {
-        const tsType = resolver.resolve(oid);
-        if (!tsType) {
-          throw Object.assign(new Error(`unsupported param type OID ${oid}`), {
-            oid,
-          });
-        }
-        const idx = i + 1;
-        const name = pq.paramHints.get(idx) ?? `arg${idx}`;
-        const isNullable = paramNullability.get(idx) ?? false;
-        return { index: idx, name, oid, tsType, nullable: isNullable };
-      });
-
-      const columns: ResolvedColumn[] = cleanColumns.map((col, i) => {
-        const tsType = resolver.resolve(col.dataTypeOID);
-        if (!tsType) {
-          throw Object.assign(
-            new Error(`unsupported column type OID ${col.dataTypeOID}`),
-            { oid: col.dataTypeOID },
-          );
-        }
-        return {
-          name: col.name,
-          oid: col.dataTypeOID,
-          tsType,
-          nullable: nullable[i]!,
-        };
-      });
-
-      const isMutation = raw.columns.length === 0;
-
-      queries.push({
-        file: pq.file,
-        docComment: pq.docComment,
-        sql: pq.sql,
-        params,
-        columns,
-        isMutation,
-      });
-    } catch (err: any) {
-      if (err.oid !== undefined) {
-        errors.push(Err.UnsupportedType(pq.file.queryName, err.oid));
-      } else {
-        errors.push(
-          Err.IntrospectionError(
-            pq.file.queryName,
-            pq.file.filePath,
-            err.message ?? String(err),
-            err.detail,
-          ),
+    if (tableOID === 0) {
+      const tableMatch = /\b(?:INSERT\s+INTO|UPDATE)\s+(\w+)/i.exec(pq.sql);
+      if (tableMatch) {
+        const { rows } = yield* queryEffect<{ oid: number }>(
+          client,
+          `SELECT oid::int FROM pg_class WHERE relname = $1`,
+          [tableMatch[1]],
         );
+        if (rows[0]) tableOID = rows[0].oid;
       }
     }
-  }
 
-  return { queries, enums: resolver.getEnums(), errors };
-}
+    if (tableOID === 0) return result;
 
-// ── Connection ──────────────────────────────────────────────────────────────
+    const { rows } = yield* queryEffect<{
+      attname: string;
+      attnotnull: boolean;
+    }>(
+      client,
+      `SELECT attname, attnotnull FROM pg_attribute
+       WHERE attrelid = $1 AND attnum > 0 AND NOT attisdropped`,
+      [tableOID],
+    );
 
-export function createClient(): pg.Client {
-  const url = process.env["DATABASE_URL"];
-  if (url) return new pg.Client({ connectionString: url });
-  return new pg.Client();
-}
+    const colNullable = new Map<string, boolean>();
+    for (const r of rows) colNullable.set(r.attname, !r.attnotnull);
+
+    for (const idx of insertOrSetParams) {
+      const colName = pq.paramHints.get(idx);
+      if (colName && colNullable.has(colName)) {
+        result.set(idx, colNullable.get(colName)!);
+      }
+    }
+
+    return result;
+  });
+
+// ── Build params + columns ──────────────────────────────────────────────────
+
+const buildParams = (
+  paramOIDs: number[],
+  resolver: TypeResolver,
+  pq: ParsedQuery,
+  paramNullability: Map<number, boolean>,
+): Effect.Effect<ResolvedParam[], UnsupportedTypeOID> =>
+  Effect.forEach(paramOIDs, (oid, i) => {
+    const tsType = resolver.resolve(oid);
+    if (!tsType) return Effect.fail(new UnsupportedTypeOID({ context: "param", oid }));
+    const idx = i + 1;
+    return Effect.succeed({
+      index: idx,
+      name: pq.paramHints.get(idx) ?? `arg${idx}`,
+      oid,
+      tsType,
+      nullable: paramNullability.get(idx) ?? false,
+    });
+  });
+
+const buildColumns = (
+  columns: RawColumnDesc[],
+  resolver: TypeResolver,
+  nullable: boolean[],
+): Effect.Effect<ResolvedColumn[], UnsupportedTypeOID> =>
+  Effect.forEach(columns, (col, i) => {
+    const tsType = resolver.resolve(col.dataTypeOID);
+    if (!tsType) return Effect.fail(new UnsupportedTypeOID({ context: "column", oid: col.dataTypeOID }));
+    return Effect.succeed({
+      name: col.name,
+      oid: col.dataTypeOID,
+      tsType,
+      nullable: nullable[i]!,
+    });
+  });

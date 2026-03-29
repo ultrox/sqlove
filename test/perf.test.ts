@@ -108,7 +108,7 @@ describe("performance", () => {
 
     const client = new pg.Client({ connectionString: DATABASE_URL });
     await client.connect();
-    const introspected = await introspect(client, parsed);
+    const introspected = await Effect.runPromise(introspect(client, parsed));
     await client.end();
 
     const { ms } = time(() =>

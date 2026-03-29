@@ -105,16 +105,7 @@ const buildModules = (
         const errors: SqloveError[] = [];
 
         for (const { outPath, queries } of validModules) {
-          const result = yield* Effect.tryPromise({
-            try: () => introspect(client, queries),
-            catch: (e: any) =>
-              Err.IntrospectionError(
-                queries[0]?.file.queryName ?? "unknown",
-                outPath,
-                e.message ?? String(e),
-                e.detail,
-              ),
-          });
+          const result = yield* introspect(client, queries);
 
           errors.push(...result.errors);
           if (result.queries.length === 0) {
