@@ -32,6 +32,7 @@ import * as Err from "./errors.js";
 
 // ── Typed errors ────────────────────────────────────────────────────────────
 
+/** Parse + Describe protocol failed — SQL is invalid or connection dropped. */
 class PgDescribeError extends Data.TaggedError("PgDescribeError")<{
   readonly sql: string;
   readonly cause: unknown;
@@ -44,6 +45,7 @@ class PgDescribeError extends Data.TaggedError("PgDescribeError")<{
   }
 }
 
+/** A pg_catalog query failed — pg_attribute, pg_class, pg_type, etc. */
 class PgQueryError extends Data.TaggedError("PgQueryError")<{
   readonly sql: string;
   readonly cause: unknown;
@@ -56,6 +58,7 @@ class PgQueryError extends Data.TaggedError("PgQueryError")<{
   }
 }
 
+/** Type OID prefetch from pg_type/pg_enum failed. */
 class PrefetchError extends Data.TaggedError("PrefetchError")<{
   readonly cause: unknown;
 }> {
@@ -64,6 +67,7 @@ class PrefetchError extends Data.TaggedError("PrefetchError")<{
   }
 }
 
+/** A param or column has a Postgres type OID we don't know how to map. */
 class UnsupportedTypeOID extends Data.TaggedError("UnsupportedTypeOID")<{
   readonly context: "param" | "column";
   readonly oid: number;
