@@ -80,7 +80,7 @@ const buildModules = (
       return {
         modules: [],
         errors: [],
-      } satisfies BuildModuleReturn;
+      };
     }
 
     // Parse phase — collect errors, keep going
@@ -95,7 +95,7 @@ const buildModules = (
       return {
         modules: [],
         errors: parseErrors,
-      } satisfies BuildModuleReturn;
+      };
 
     // Introspect + generate — scoped client
     const { generated, errors: introErrors } = yield* withClient((client) =>
