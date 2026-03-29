@@ -353,15 +353,37 @@ export async function introspect(
   for (const pq of parsedQueries) {
     try {
       const raw = await describeRaw(client, pq.file.content);
+
+      // Strip ?/! nullability suffixes from column names.
+      // name?  → force nullable
+      // name!  → force non-null
+      const nullOverrides = new Map<number, boolean>();
+      const cleanColumns = raw.columns.map((col, i) => {
+        if (col.name.endsWith("?")) {
+          nullOverrides.set(i, true);
+          return { ...col, name: col.name.slice(0, -1) };
+        }
+        if (col.name.endsWith("!")) {
+          nullOverrides.set(i, false);
+          return { ...col, name: col.name.slice(0, -1) };
+        }
+        return col;
+      });
+
       const allOids = [
         ...raw.paramOIDs,
-        ...raw.columns.map((c) => c.dataTypeOID),
+        ...cleanColumns.map((c) => c.dataTypeOID),
       ];
       await resolver.prefetch(allOids);
 
       const nullable = await resolveNullability(
-        client, raw.columns, pq.file.content,
+        client, cleanColumns, pq.file.content,
       );
+
+      // Apply ?/! overrides
+      for (const [idx, forced] of nullOverrides) {
+        nullable[idx] = forced;
+      }
 
       // Resolve param nullability for INSERT/SET params
       const paramNullability = await resolveParamNullability(client, raw, pq);
@@ -375,18 +397,16 @@ export async function introspect(
         }
         const idx = i + 1;
         const name = pq.paramHints.get(idx) ?? `arg${idx}`;
-        const nullable = paramNullability.get(idx) ?? false;
-        return { index: idx, name, oid, tsType, nullable };
+        const isNullable = paramNullability.get(idx) ?? false;
+        return { index: idx, name, oid, tsType, nullable: isNullable };
       });
 
-      const columns: ResolvedColumn[] = raw.columns.map((col, i) => {
+      const columns: ResolvedColumn[] = cleanColumns.map((col, i) => {
         const tsType = resolver.resolve(col.dataTypeOID);
         if (!tsType) {
           throw Object.assign(
             new Error(`unsupported column type OID ${col.dataTypeOID}`),
-            {
-              oid: col.dataTypeOID,
-            },
+            { oid: col.dataTypeOID },
           );
         }
         return {

@@ -870,6 +870,52 @@ export const simpleSelect: Effect.Effect<
   sql<SimpleSelectRow>\`SELECT id, name, email FROM users ORDER BY name\`
 ));
 
+/** Rows returned by {@link suffixNotNull}.
+ *  @see \`/sql/suffix_not_null.sql\` */
+export class SuffixNotNullRow extends Schema.Class<SuffixNotNullRow>("SuffixNotNullRow")({
+  bio: Schema.String,
+  age: Schema.Number,
+}) {}
+
+/**
+ * Force non-null with ! suffix on a nullable column.
+ * @see \`/sql/suffix_not_null.sql\`
+ */
+export const suffixNotNull = (
+  params: {
+    readonly id: number;
+  }
+): Effect.Effect<ReadonlyArray<SuffixNotNullRow>, SqlError, SqlClient> =>
+  SqlClient.pipe(Effect.flatMap((sql) =>
+    sql<SuffixNotNullRow>\`SELECT bio AS "bio!", age AS "age!"
+FROM users
+WHERE id = \${params.id}\`
+  ));
+
+/** Rows returned by {@link suffixNullable}.
+ *  @see \`/sql/suffix_nullable.sql\` */
+export class SuffixNullableRow extends Schema.Class<SuffixNullableRow>("SuffixNullableRow")({
+  name: Schema.String,
+  lastOrderAt: Schema.propertySignature(Schema.NullOr(Schema.DateFromString)).pipe(Schema.fromKey("last_order_at")),
+}) {}
+
+/**
+ * Force nullable with ? suffix on a NOT NULL column.
+ * @see \`/sql/suffix_nullable.sql\`
+ */
+export const suffixNullable: Effect.Effect<
+  ReadonlyArray<SuffixNullableRow>,
+  SqlError,
+  SqlClient
+> = SqlClient.pipe(Effect.flatMap((sql) =>
+  sql<SuffixNullableRow>\`SELECT
+  u.name,
+  max(o.created_at) AS "last_order_at?"
+FROM users u
+LEFT JOIN orders o ON o.user_id = u.id
+GROUP BY u.id\`
+));
+
 /** Rows returned by {@link upsertReview}.
  *  @see \`/sql/upsert_review.sql\` */
 export class UpsertReviewRow extends Schema.Class<UpsertReviewRow>("UpsertReviewRow")({

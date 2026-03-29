@@ -112,11 +112,11 @@ describe("complex queries — correctness", () => {
       expect(cols["role"]!.tsType.enumDef).toBeDefined();
     });
 
-    // KNOWN LIMITATION: max() on LEFT JOIN returns tableOID=0
-    // (expression column). We can't detect its nullability from
-    // pg_attribute. max() CAN return null when no rows match.
-    // Fixing this requires understanding aggregate semantics.
-    it.todo("aggregates on LEFT JOIN are nullable (max can return null)");
+    // max() on LEFT JOIN can return null when no rows match.
+    // Expression column (tableOID=0) — tool can't detect this.
+    // Workaround: use ? suffix on the alias.
+    // See suffix_nullable.sql for the pattern.
+    it.todo("aggregates on LEFT JOIN are nullable (max can return null) — use ? suffix");
 
     it("array column resolves", async () => {
       const { cols } = await describe_("user_dashboard");
@@ -128,10 +128,9 @@ describe("complex queries — correctness", () => {
   // ── category_tree ──────────────────────────────────────
 
   describe("category_tree (recursive CTE)", () => {
-    // KNOWN LIMITATION: CTE columns have tableOID=0.
-    // parent_id IS nullable in the base table but the CTE
-    // output loses that information.
-    it.todo("parent_id is nullable (top-level categories have no parent)");
+    // CTE columns have tableOID=0 — tool can't check pg_attribute.
+    // Workaround: use ? suffix on the alias.
+    it.todo("parent_id is nullable (top-level categories have no parent) — use ? suffix");
 
     it("product_count from LEFT JOIN aggregate is not nullable (coalesce)", async () => {
       const { cols } = await describe_("category_tree");
@@ -195,10 +194,10 @@ describe("complex queries — correctness", () => {
   // ── jsonb_query ────────────────────────────────────────
 
   describe("jsonb_query", () => {
-    // KNOWN LIMITATION: ->> extracts text from jsonb.
-    // tableOID=0 (expression). The key might not exist → null.
-    // Fixing this requires understanding jsonb operator semantics.
-    it.todo("jsonb-extracted text columns are nullable");
+    // ->> extracts text from jsonb. tableOID=0 (expression).
+    // Key might not exist → null. Tool can't detect this.
+    // Workaround: use ? suffix on the alias.
+    it.todo("jsonb-extracted text columns are nullable — use ? suffix");
 
     it("cast from jsonb produces correct type", async () => {
       const { cols } = await describe_("jsonb_query");
@@ -288,6 +287,27 @@ describe("complex queries — correctness", () => {
       const { params } = await describe_("search_products");
       expect(params["name"]).toBeDefined();
       expect(params["name"]!.tsType.tsAnnotation).toBe("string");
+    });
+  });
+
+  // ── ?/! suffixes ───────────────────────────────────────
+
+  describe("nullability suffixes", () => {
+    it("? forces column to nullable", async () => {
+      const { cols } = await describe_("suffix_nullable");
+      expect(cols["last_order_at"]!.nullable).toBe(true);
+      // suffix stripped from name
+      expect(cols["last_order_at?"]).toBeUndefined();
+    });
+
+    it("! forces column to non-null", async () => {
+      const { cols } = await describe_("suffix_not_null");
+      // bio and age are nullable in the table, but ! overrides
+      expect(cols["bio"]!.nullable).toBe(false);
+      expect(cols["age"]!.nullable).toBe(false);
+      // suffixes stripped
+      expect(cols["bio!"]).toBeUndefined();
+      expect(cols["age!"]).toBeUndefined();
     });
   });
 });
