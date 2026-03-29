@@ -1,10 +1,10 @@
 {
-  "name": "sqlove",
+  "name": "@ma.vu/sqlove",
   "version": "0.1.0",
   "description": "Type-safe SQL in TypeScript, powered by Effect",
   "type": "module",
   "bin": {
-    "sqlove": "./dist/cli.js"
+    "sqlove": "dist/cli.js"
   },
   "main": "./dist/main.js",
   "types": "./dist/main.d.ts",
