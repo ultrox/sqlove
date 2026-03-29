@@ -98,6 +98,17 @@ describe("codegen", () => {
       expect(src).toContain("Effect.asVoid");
     });
 
+    it("no-param mutation is a const void", () => {
+      const src = gen([query({
+        name: "clear_all",
+        sql: "DELETE FROM todos",
+        isMutation: true,
+      })]);
+      expect(src).toMatch(/export const clearAll:\s*Effect\.Effect<void/);
+      expect(src).toContain("Effect.asVoid");
+      expect(src).not.toContain("params");
+    });
+
     it("mutation with RETURNING returns rows (not void)", () => {
       const src = gen([query({
         name: "create_user",
