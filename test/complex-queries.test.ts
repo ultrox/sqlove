@@ -324,6 +324,41 @@ describe("complex queries — correctness", () => {
     });
   });
 
+  // ── Known limitations ───────────────────────────────────
+  // These document cases where the tool gets it wrong.
+  // Each has a corresponding limitation_*.sql fixture.
+  // If a future change fixes any of these, flip the assertion
+  // and move the test out of this section.
+
+  describe("known limitations", () => {
+    it("non-strict function: defaults to not-nullable (may be wrong)", async () => {
+      // concat_ws is non-strict — handles nulls, returns non-null.
+      // But a user function could return null. Tool can't know.
+      // Default: not-nullable. User overrides with ? if needed.
+      const { cols } = await describe_("limitation_non_strict_func");
+      expect(cols["full_text"]!.nullable).toBe(false);
+    });
+
+    it("strict function on non-null input: says not-nullable (usually correct)", async () => {
+      // replace(name, 'a', 'b') where name is NOT NULL.
+      // Tool says not-nullable. Usually correct — strict + non-null args.
+      // Edge case: a strict function COULD return null from non-null
+      // inputs by internal logic. proisstrict doesn't prevent that.
+      const { cols } = await describe_("limitation_strict_returns_null");
+      expect(cols["cleaned"]!.nullable).toBe(false);
+    });
+
+    it("WHERE in CTE: outer query doesn't see inner WHERE narrowing", async () => {
+      // CTE has WHERE bio IS NOT NULL, but outer SELECT
+      // only sees CTE output with tableOID=0. Tool falls back
+      // to pg_attribute name lookup → bio is nullable in users table.
+      const { cols } = await describe_("limitation_nested_where");
+      expect(cols["bio"]!.nullable).toBe(true);
+      // ^ This is WRONG — bio is guaranteed non-null by the CTE.
+      //   Use ! override: SELECT bio AS "bio!" FROM filtered
+    });
+  });
+
   // ── ?/! suffixes ───────────────────────────────────────
 
   describe("nullability suffixes", () => {

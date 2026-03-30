@@ -740,6 +740,81 @@ LEFT JOIN orders o ON o.user_id = u.id
 WHERE u.id = \${params.id}\`
   ));
 
+/** Rows returned by {@link limitationNestedWhere}.
+ *  @see \`/sql/limitation_nested_where.sql\` */
+export class LimitationNestedWhereRow extends Schema.Class<LimitationNestedWhereRow>("LimitationNestedWhereRow")({
+  id: Schema.Number,
+  bio: Schema.NullOr(Schema.String),
+}) {}
+
+/**
+ * WHERE in a CTE is not analyzed by the outer query.
+ * The CTE filters bio IS NOT NULL, but the outer SELECT
+ * doesn't know that. Tool says bio is nullable.
+ * Use ! to override if you know the CTE guarantees non-null.
+ * @see \`/sql/limitation_nested_where.sql\`
+ */
+export const limitationNestedWhere = (
+  params: {
+    readonly id: number;
+  }
+): Effect.Effect<ReadonlyArray<LimitationNestedWhereRow>, SqlError, SqlClient> =>
+  SqlClient.pipe(Effect.flatMap((sql) =>
+    sql<LimitationNestedWhereRow>\`WITH filtered AS (
+  SELECT id, bio FROM users WHERE bio IS NOT NULL
+)
+SELECT id, bio FROM filtered WHERE id = \${params.id}\`
+  ));
+
+/** Rows returned by {@link limitationNonStrictFunc}.
+ *  @see \`/sql/limitation_non_strict_func.sql\` */
+export class LimitationNonStrictFuncRow extends Schema.Class<LimitationNonStrictFuncRow>("LimitationNonStrictFuncRow")({
+  id: Schema.Number,
+  fullText: Schema.propertySignature(Schema.String).pipe(Schema.fromKey("full_text")),
+}) {}
+
+/**
+ * Non-strict custom function: tool can't know it returns null.
+ * concat_ws is non-strict (handles nulls internally, returns non-null).
+ * But a hypothetical user function could return null on non-null input.
+ * This tests that non-strict functions default to not-nullable.
+ * Use ? to override if you know better.
+ * @see \`/sql/limitation_non_strict_func.sql\`
+ */
+export const limitationNonStrictFunc = (
+  params: {
+    readonly id: number;
+  }
+): Effect.Effect<ReadonlyArray<LimitationNonStrictFuncRow>, SqlError, SqlClient> =>
+  SqlClient.pipe(Effect.flatMap((sql) =>
+    sql<LimitationNonStrictFuncRow>\`SELECT id, concat_ws(' ', name, bio) AS full_text FROM users WHERE id = \${params.id}\`
+  ));
+
+/** Rows returned by {@link limitationStrictReturnsNull}.
+ *  @see \`/sql/limitation_strict_returns_null.sql\` */
+export class LimitationStrictReturnsNullRow extends Schema.Class<LimitationStrictReturnsNullRow>("LimitationStrictReturnsNullRow")({
+  id: Schema.Number,
+  cleaned: Schema.String,
+}) {}
+
+/**
+ * Strict function that CAN return null on non-null input.
+ * replace(name, 'a', NULL) → NULL because third arg is null literal.
+ * But what if a strict function returns null from non-null inputs
+ * by internal logic? proisstrict only guarantees null-in→null-out,
+ * not non-null-in→non-null-out. Tool says not-nullable here.
+ * Use ? to override if you know the function can return null.
+ * @see \`/sql/limitation_strict_returns_null.sql\`
+ */
+export const limitationStrictReturnsNull = (
+  params: {
+    readonly id: number;
+  }
+): Effect.Effect<ReadonlyArray<LimitationStrictReturnsNullRow>, SqlError, SqlClient> =>
+  SqlClient.pipe(Effect.flatMap((sql) =>
+    sql<LimitationStrictReturnsNullRow>\`SELECT id, replace(name, 'a', 'b') AS cleaned FROM users WHERE id = \${params.id}\`
+  ));
+
 /** Rows returned by {@link multiEnum}.
  *  @see \`/sql/multi_enum.sql\` */
 export class MultiEnumRow extends Schema.Class<MultiEnumRow>("MultiEnumRow")({
