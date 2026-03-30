@@ -1005,8 +1005,8 @@ export class OverrideWhereNotNullRow extends Schema.Class<OverrideWhereNotNullRo
 
 /**
  * bio is nullable in the table, but WHERE filters nulls out.
- * Tool says nullable (correct per schema, wrong per query).
- * ! overrides to non-null.
+ * WHERE null-rejection detects this automatically.
+ * No ! needed.
  * @see \`/sql/override_where_not_null.sql\`
  */
 export const overrideWhereNotNull: Effect.Effect<
@@ -1014,7 +1014,7 @@ export const overrideWhereNotNull: Effect.Effect<
   SqlError,
   SqlClient
 > = SqlClient.pipe(Effect.flatMap((sql) =>
-  sql<OverrideWhereNotNullRow>\`SELECT id, bio AS "bio!" FROM users WHERE bio IS NOT NULL\`
+  sql<OverrideWhereNotNullRow>\`SELECT id, bio FROM users WHERE bio IS NOT NULL\`
 ));
 
 /** Rows returned by {@link productStats}.
@@ -1238,6 +1238,84 @@ LEFT JOIN orders o ON o.user_id = u.id AND o.status != 'cancelled'
 WHERE u.id = \${params.id}
 GROUP BY u.id\`
   ));
+
+/** Rows returned by {@link whereAndSafe}.
+ *  @see \`/sql/where_and_safe.sql\` */
+export class WhereAndSafeRow extends Schema.Class<WhereAndSafeRow>("WhereAndSafeRow")({
+  id: Schema.Number,
+  bio: Schema.String,
+}) {}
+
+/**
+ * AND guarantees non-null: bio must pass IS NOT NULL.
+ * @see \`/sql/where_and_safe.sql\`
+ */
+export const whereAndSafe: Effect.Effect<
+  ReadonlyArray<WhereAndSafeRow>,
+  SqlError,
+  SqlClient
+> = SqlClient.pipe(Effect.flatMap((sql) =>
+  sql<WhereAndSafeRow>\`SELECT id, bio FROM users WHERE bio IS NOT NULL AND age > 18\`
+));
+
+/** Rows returned by {@link whereComparison}.
+ *  @see \`/sql/where_comparison.sql\` */
+export class WhereComparisonRow extends Schema.Class<WhereComparisonRow>("WhereComparisonRow")({
+  id: Schema.Number,
+  bio: Schema.String,
+}) {}
+
+/**
+ * Comparison operator rejects nulls (bio = 'x' filters null bios).
+ * @see \`/sql/where_comparison.sql\`
+ */
+export const whereComparison = (
+  params: {
+    readonly bio: string;
+  }
+): Effect.Effect<ReadonlyArray<WhereComparisonRow>, SqlError, SqlClient> =>
+  SqlClient.pipe(Effect.flatMap((sql) =>
+    sql<WhereComparisonRow>\`SELECT id, bio FROM users WHERE bio = \${params.bio}\`
+  ));
+
+/** Rows returned by {@link whereFuncStrict}.
+ *  @see \`/sql/where_func_strict.sql\` */
+export class WhereFuncStrictRow extends Schema.Class<WhereFuncStrictRow>("WhereFuncStrictRow")({
+  id: Schema.Number,
+  bio: Schema.String,
+}) {}
+
+/**
+ * length(bio) > 0 rejects nulls (length is strict, NULL → NULL > 0 → filtered).
+ * @see \`/sql/where_func_strict.sql\`
+ */
+export const whereFuncStrict: Effect.Effect<
+  ReadonlyArray<WhereFuncStrictRow>,
+  SqlError,
+  SqlClient
+> = SqlClient.pipe(Effect.flatMap((sql) =>
+  sql<WhereFuncStrictRow>\`SELECT id, bio FROM users WHERE length(bio) > 0\`
+));
+
+/** Rows returned by {@link whereOrNotSafe}.
+ *  @see \`/sql/where_or_not_safe.sql\` */
+export class WhereOrNotSafeRow extends Schema.Class<WhereOrNotSafeRow>("WhereOrNotSafeRow")({
+  id: Schema.Number,
+  bio: Schema.NullOr(Schema.String),
+}) {}
+
+/**
+ * OR does NOT guarantee non-null: bio could still be null
+ * because the other branch (age > 18) can match null-bio rows.
+ * @see \`/sql/where_or_not_safe.sql\`
+ */
+export const whereOrNotSafe: Effect.Effect<
+  ReadonlyArray<WhereOrNotSafeRow>,
+  SqlError,
+  SqlClient
+> = SqlClient.pipe(Effect.flatMap((sql) =>
+  sql<WhereOrNotSafeRow>\`SELECT id, bio FROM users WHERE bio IS NOT NULL OR age > 18\`
+));
 
 /** Rows returned by {@link windowRunningTotal}.
  *  @see \`/sql/window_running_total.sql\` */

@@ -21,6 +21,7 @@ import pg from "pg";
 import { Effect, Option, Data, Array as Arr } from "effect";
 import { TypeResolver } from "./type-map.js";
 import { detectNullableExpressions } from "./sql-ast.js";
+import { whereNonNullColumns } from "./where-nullability.js";
 import type {
   EnumDef,
   ParsedQuery,
@@ -196,6 +197,26 @@ const introspectOne = (
     });
 
     const nullable = yield* resolveNullability(client, cleanColumns, pq.file.content);
+
+    // Layer 5: WHERE clause null-rejection
+    // If WHERE rejects rows where a column is NULL, that column
+    // is non-null in the results. Uses NULL-substitution technique.
+    const nullableColNames = new Set<string>();
+    for (let i = 0; i < cleanColumns.length; i++) {
+      if (nullable[i]) nullableColNames.add(cleanColumns[i]!.name.toLowerCase());
+    }
+    const whereNonNull = yield* Effect.tryPromise({
+      try: () => whereNonNullColumns(pq.file.content, nullableColNames),
+      catch: () => new PgQueryError({ sql: "<where-analysis>", cause: "WHERE analysis failed" }),
+    }).pipe(Effect.orElseSucceed(() => new Set<string>()));
+
+    for (let i = 0; i < cleanColumns.length; i++) {
+      if (whereNonNull.has(cleanColumns[i]!.name.toLowerCase())) {
+        nullable[i] = false;
+      }
+    }
+
+    // Layer 6: ?/! suffix overrides (user always has final say)
     for (const [idx, forced] of nullOverrides) {
       nullable[idx] = forced;
     }

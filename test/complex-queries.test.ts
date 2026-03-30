@@ -361,12 +361,30 @@ describe("complex queries — correctness", () => {
   // ── Override correcting tool mistakes ──────────────────
 
   describe("overrides correcting auto-detection", () => {
-    it("! overrides false positive: WHERE bio IS NOT NULL", async () => {
-      // bio is nullable in the table, but WHERE filters nulls out
-      // Without !: tool says nullable (wrong for this query)
-      // With !: forced non-null (correct)
+    it("WHERE IS NOT NULL auto-narrows to non-null", async () => {
       const { cols } = await describe_("override_where_not_null");
       expect(cols["bio"]!.nullable).toBe(false);
+    });
+
+    it("WHERE col = $1 rejects nulls (= is strict)", async () => {
+      const { cols } = await describe_("where_comparison");
+      expect(cols["bio"]!.nullable).toBe(false);
+    });
+
+    it("WHERE length(col) > 0 rejects nulls (strict func)", async () => {
+      const { cols } = await describe_("where_func_strict");
+      expect(cols["bio"]!.nullable).toBe(false);
+    });
+
+    it("WHERE col IS NOT NULL AND ... narrows (AND)", async () => {
+      const { cols } = await describe_("where_and_safe");
+      expect(cols["bio"]!.nullable).toBe(false);
+    });
+
+    it("WHERE col IS NOT NULL OR ... does NOT narrow (OR)", async () => {
+      const { cols } = await describe_("where_or_not_safe");
+      // bio is still nullable — OR doesn't guarantee
+      expect(cols["bio"]!.nullable).toBe(true);
     });
 
     it("upper(nullable) auto-detected via pg_proc.proisstrict", async () => {
