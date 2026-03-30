@@ -16,6 +16,57 @@ So instead of maintaining types by hand or generating them
 from a schema file that might be stale, just ask the database.
 Write SQL, ask Postgres what the types are, generate TypeScript.
 
+For example, given this query:
+
+```sql
+SELECT u.name, u.role, o.total, o.status
+FROM users u
+LEFT JOIN orders o ON o.user_id = u.id
+WHERE u.email = $1
+```
+
+<details>
+<summary>Postgres tells us everything — parameter types, column types, enums, nullability</summary>
+
+**Parameter types** (from `pg_prepared_statements` after `PREPARE`):
+
+```
+ parameter_types
+─────────────────
+ {text}
+```
+
+`$1` is `text`. No guessing.
+
+**Column types** (from `pg_attribute` via the RowDescription's table OID + column ID):
+
+```
+ column_name │     type      │ nullability
+─────────────┼───────────────┼─────────────
+ name        │ text          │ NOT NULL
+ role        │ user_role     │ NOT NULL
+ total       │ numeric(10,2) │ NOT NULL
+ status      │ order_status  │ NOT NULL
+```
+
+**Enum variants** (from `pg_enum`):
+
+```
+user_role:    admin, member, guest
+order_status: pending, confirmed, shipped, delivered, cancelled
+```
+
+**Join nullability** (from `EXPLAIN GENERIC_PLAN`):
+
+The plan shows `Join Type: "Left"` with `orders` on the inner
+(nullable) side. So `total` and `status` become nullable in the
+result even though they're `NOT NULL` in the table.
+
+All of this is from the live database. Not a schema file.
+Not a guess. The actual running system.
+
+</details>
+
 This is what [Squirrel](https://github.com/giacomocavalieri/squirrel)
 does for Gleam. We ported the philosophy to TypeScript + Effect.
 
