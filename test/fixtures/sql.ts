@@ -645,7 +645,7 @@ export class JsonbQueryRow extends Schema.Class<JsonbQueryRow>("JsonbQueryRow")(
  */
 export const jsonbQuery = (
   params: {
-    readonly arg1: unknown;
+    readonly metadata: unknown;
   }
 ): Effect.Effect<ReadonlyArray<JsonbQueryRow>, SqlError, SqlClient> =>
   SqlClient.pipe(Effect.flatMap((sql) =>
@@ -656,7 +656,7 @@ export const jsonbQuery = (
   metadata->>'level' AS level,
   (metadata->>'salary')::numeric AS salary
 FROM users
-WHERE metadata @> ${params.arg1}::jsonb`
+WHERE metadata @> ${params.metadata}::jsonb`
   ));
 
 /** Rows returned by {@link lateralRecentOrders}.

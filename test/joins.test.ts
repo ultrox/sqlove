@@ -1,7 +1,7 @@
 import { Effect } from "effect";
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import pg from "pg";
-import { parse } from "../src/internals/parser.js";
+import { parse, loadParserModule } from "../src/internals/parser.js";
 import { introspect } from "../src/internals/introspector.js";
 import type { SqlFile } from "../src/internals/types.js";
 import { readFileSync } from "node:fs";
@@ -36,6 +36,7 @@ async function describeColumns(name: string) {
 beforeAll(async () => {
   client = new pg.Client({ connectionString: DATABASE_URL });
   await client.connect();
+  await loadParserModule();
 });
 
 afterAll(async () => {

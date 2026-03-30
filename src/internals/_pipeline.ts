@@ -15,7 +15,7 @@ import { Effect } from "effect";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { discover } from "./discovery.js";
-import { parse, validateQueryName } from "./parser.js";
+import { parse, validateQueryName, loadParserModule } from "./parser.js";
 import { createClient, introspect } from "./introspector.js";
 import { generate } from "./codegen.js";
 import type { SqlFile, ParsedQuery, GeneratedModule } from "./types.js";
@@ -83,6 +83,12 @@ const buildModules = (
         errors: [],
       };
     }
+
+    // Load AST parser (libpg-query WASM) before parsing
+    yield* Effect.tryPromise({
+      try: () => loadParserModule(),
+      catch: (cause) => Err.FileReadError("<ast-loader>", cause),
+    });
 
     // Parse phase — collect errors, keep going
     const parseResults = [...discovered.entries()].map(([outPath, files]) =>

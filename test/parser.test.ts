@@ -1,6 +1,10 @@
-import { describe, it, expect } from "vitest";
-import { parse, validateQueryName } from "../src/internals/parser.js";
+import { describe, it, expect, beforeAll } from "vitest";
+import { parse, validateQueryName, loadParserModule } from "../src/internals/parser.js";
 import type { SqlFile } from "../src/internals/types.js";
+
+beforeAll(async () => {
+  await loadParserModule();
+});
 
 function file(content: string, name = "test_query"): SqlFile {
   return { filePath: `/src/sql/${name}.sql`, queryName: name, modulePath: "app", content };

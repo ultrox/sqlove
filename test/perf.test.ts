@@ -6,7 +6,7 @@ import pg from "pg";
 import { Effect } from "effect";
 import { run } from "../src/internals/_pipeline.js";
 import { discover } from "../src/internals/discovery.js";
-import { parse } from "../src/internals/parser.js";
+import { parse, loadParserModule } from "../src/internals/parser.js";
 import { generate } from "../src/internals/codegen.js";
 import { introspect, createClient } from "../src/internals/introspector.js";
 import type { SqlFile, ParsedQuery } from "../src/internals/types.js";
@@ -33,6 +33,7 @@ async function timeAsync<T>(fn: () => Promise<T>): Promise<{ result: T; ms: numb
 beforeAll(async () => {
   const client = new pg.Client({ connectionString: DATABASE_URL });
   await client.connect();
+  await loadParserModule();
   await client.query(`
     CREATE TABLE IF NOT EXISTS todo (
       id serial PRIMARY KEY,
@@ -92,6 +93,7 @@ describe("performance", () => {
 
     const client = new pg.Client({ connectionString: DATABASE_URL });
     await client.connect();
+  await loadParserModule();
     try {
       const { ms } = await timeAsync(() => introspect(client, parsed));
       console.log(`    introspect: ${ms.toFixed(1)}ms for ${parsed.length} queries`);
@@ -108,6 +110,7 @@ describe("performance", () => {
 
     const client = new pg.Client({ connectionString: DATABASE_URL });
     await client.connect();
+  await loadParserModule();
     const introspected = await Effect.runPromise(introspect(client, parsed));
     await client.end();
 

@@ -2,7 +2,7 @@ import { Effect } from "effect";
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import pg from "pg";
 import { introspect } from "../src/internals/introspector.js";
-import { parse } from "../src/internals/parser.js";
+import { parse, loadParserModule } from "../src/internals/parser.js";
 import type { SqlFile } from "../src/internals/types.js";
 
 const DATABASE_URL = "postgresql://sqlove:sqlove@localhost:5555/sqlove_test";
@@ -15,6 +15,7 @@ function file(name: string, content: string): SqlFile {
 beforeAll(async () => {
   client = new pg.Client({ connectionString: DATABASE_URL });
   await client.connect();
+  await loadParserModule();
 
   // Ensure schema exists
   await client.query(`
