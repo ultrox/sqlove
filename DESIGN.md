@@ -19,51 +19,117 @@ Write SQL, ask Postgres what the types are, generate TypeScript.
 For example, given this query:
 
 ```sql
-SELECT u.name, u.role, o.total, o.status
-FROM users u
-LEFT JOIN orders o ON o.user_id = u.id
-WHERE u.email = $1
+-- order_details.sql
+SELECT
+  o.id AS order_id,
+  o.status,
+  u.name AS customer,
+  p.name AS product,
+  p.price,
+  li.quantity,
+  (li.quantity * li.unit_price)::numeric(10,2) AS line_total,
+  pay.method AS payment_method,
+  pay.paid_at,
+  r.reason AS refund_reason
+FROM orders o
+JOIN users u ON u.id = o.user_id
+JOIN line_items li ON li.order_id = o.id
+JOIN products p ON p.id = li.product_id
+LEFT JOIN payments pay ON pay.order_id = o.id
+LEFT JOIN refunds r ON r.order_id = o.id
+WHERE o.id = $1 AND o.status = $2::order_status
 ```
 
 <details>
-<summary>Postgres tells us everything — parameter types, column types, enums, nullability</summary>
+<summary>Postgres tells us everything — click to see the raw catalog output</summary>
 
-**Parameter types** (from `pg_prepared_statements` after `PREPARE`):
-
-```
- parameter_types
-─────────────────
- {text}
-```
-
-`$1` is `text`. No guessing.
-
-**Column types** (from `pg_attribute` via the RowDescription's table OID + column ID):
+**1. Parameter types** — `PREPARE` + `pg_prepared_statements`:
 
 ```
- column_name │     type      │ nullability
-─────────────┼───────────────┼─────────────
- name        │ text          │ NOT NULL
- role        │ user_role     │ NOT NULL
- total       │ numeric(10,2) │ NOT NULL
- status      │ order_status  │ NOT NULL
+    parameter_types
+------------------------
+ {integer,order_status}
 ```
 
-**Enum variants** (from `pg_enum`):
+`$1` is `integer`, `$2` is `order_status` (an enum). No guessing.
+
+**2. Column types + schema nullability** — `pg_attribute`:
 
 ```
-user_role:    admin, member, guest
-order_status: pending, confirmed, shipped, delivered, cancelled
+ column_name │ source_table │         pg_type          │ schema_null
+─────────────┼──────────────┼──────────────────────────┼─────────────
+ id          │ orders       │ integer                  │ NOT NULL
+ status      │ orders       │ order_status             │ NOT NULL
+ name        │ users        │ text                     │ NOT NULL
+ name        │ products     │ text                     │ NOT NULL
+ price       │ products     │ numeric(10,2)            │ NOT NULL
+ quantity    │ line_items   │ integer                  │ NOT NULL
+ unit_price  │ line_items   │ numeric(10,2)            │ NOT NULL
+ method      │ payments     │ text                     │ NOT NULL
+ paid_at     │ payments     │ timestamp with time zone │ NOT NULL
+ reason      │ refunds      │ text                     │ nullable
 ```
 
-**Join nullability** (from `EXPLAIN GENERIC_PLAN`):
+**3. Join types** — `EXPLAIN (GENERIC_PLAN)`:
 
-The plan shows `Join Type: "Left"` with `orders` on the inner
-(nullable) side. So `total` and `status` become nullable in the
-result even though they're `NOT NULL` in the table.
+```
+ "Join Type": "Inner"   ← orders ↔ users
+ "Join Type": "Inner"   ← orders ↔ line_items
+ "Join Type": "Inner"   ← line_items ↔ products
+ "Join Type": "Left"    ← LEFT JOIN payments (nullable side: pay)
+ "Join Type": "Left"    ← LEFT JOIN refunds (nullable side: r)
+```
 
-All of this is from the live database. Not a schema file.
-Not a guess. The actual running system.
+`pay.method`, `pay.paid_at`, and `r.reason` are on the nullable
+side of LEFT JOINs — so they're nullable in the result even
+though `method` and `paid_at` are `NOT NULL` in their tables.
+
+**4. Enum variants** — `pg_enum`:
+
+```
+ order_status: {pending, confirmed, shipped, delivered, cancelled}
+```
+
+**5. Operator strictness** — `pg_proc.proisstrict`:
+
+```
+ oprname │   proname   │ proisstrict
+─────────┼─────────────┼─────────────
+ *       │ int4mul     │ true
+ *       │ numeric_mul │ true
+```
+
+The `*` operator is strict — `NULL * x` returns `NULL`.
+So `(li.quantity * li.unit_price)` is nullable if either
+operand is nullable (they're not, so the expression is
+not nullable).
+
+**6. What sqlove generates from all of this:**
+
+```ts
+export class OrderDetailsRow extends Schema.Class<OrderDetailsRow>("OrderDetailsRow")({
+  orderId: Schema.propertySignature(Schema.Number).pipe(Schema.fromKey("order_id")),
+  status: OrderStatus,                                    // enum
+  customer: Schema.String,
+  product: Schema.String,
+  price: Schema.String,                                   // numeric → string
+  quantity: Schema.Number,
+  lineTotal: Schema.propertySignature(Schema.String)      // computed, non-null
+    .pipe(Schema.fromKey("line_total")),
+  paymentMethod: Schema.propertySignature(                 // LEFT JOIN → nullable
+    Schema.NullOr(Schema.String)
+  ).pipe(Schema.fromKey("payment_method")),
+  paidAt: Schema.propertySignature(                        // LEFT JOIN → nullable
+    Schema.NullOr(Schema.DateFromString)
+  ).pipe(Schema.fromKey("paid_at")),
+  refundReason: Schema.propertySignature(                  // LEFT JOIN + nullable column
+    Schema.NullOr(Schema.String)
+  ).pipe(Schema.fromKey("refund_reason")),
+}) {}
+```
+
+Every type, every nullability decision, every enum — derived
+from the live database. Not a schema file. Not a guess.
 
 </details>
 
