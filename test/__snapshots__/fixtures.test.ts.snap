@@ -865,8 +865,8 @@ export class OverrideCoalesceBothNullRow extends Schema.Class<OverrideCoalesceBo
 
 /**
  * coalesce(bio, notes) where both are nullable.
- * Tool says not nullable (CoalesceExpr → not nullable).
- * But if ALL args are null, result is null. Use ? to correct.
+ * AST checks all args: both are nullable ColumnRefs → result nullable.
+ * No ? needed — auto-detected.
  * @see \`/sql/override_coalesce_both_null.sql\`
  */
 export const overrideCoalesceBothNull = (
@@ -875,7 +875,7 @@ export const overrideCoalesceBothNull = (
   }
 ): Effect.Effect<ReadonlyArray<OverrideCoalesceBothNullRow>, SqlError, SqlClient> =>
   SqlClient.pipe(Effect.flatMap((sql) =>
-    sql<OverrideCoalesceBothNullRow>\`SELECT u.id, coalesce(u.bio, o.notes) AS "fallback?" 
+    sql<OverrideCoalesceBothNullRow>\`SELECT u.id, coalesce(u.bio, o.notes) AS fallback
 FROM users u LEFT JOIN orders o ON o.user_id = u.id
 WHERE u.id = \${params.id}\`
   ));
@@ -957,8 +957,8 @@ export class OverrideFuncOnNullableRow extends Schema.Class<OverrideFuncOnNullab
 
 /**
  * upper(bio) where bio is nullable.
- * Tool says not nullable (upper is not in nullable aggregates list).
- * But upper(NULL) = NULL. Use ? to correct.
+ * pg_proc.proisstrict detects upper is strict → null in = null out.
+ * No ? needed — auto-detected.
  * @see \`/sql/override_func_on_nullable.sql\`
  */
 export const overrideFuncOnNullable = (
@@ -967,7 +967,7 @@ export const overrideFuncOnNullable = (
   }
 ): Effect.Effect<ReadonlyArray<OverrideFuncOnNullableRow>, SqlError, SqlClient> =>
   SqlClient.pipe(Effect.flatMap((sql) =>
-    sql<OverrideFuncOnNullableRow>\`SELECT id, upper(bio) AS "display_bio?" FROM users WHERE id = \${params.id}\`
+    sql<OverrideFuncOnNullableRow>\`SELECT id, upper(bio) AS display_bio FROM users WHERE id = \${params.id}\`
   ));
 
 /** Rows returned by {@link overrideJsonbNullable}.

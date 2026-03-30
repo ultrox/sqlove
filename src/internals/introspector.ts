@@ -357,17 +357,21 @@ const resolveNullability = (
       nullable[idx] = true;
     }
 
-    // Layer 3: SQL AST for expression nullability
-    // libpg-query parses the SQL into a typed AST — no regex
+    // Layer 3: SQL AST + pg_proc.proisstrict for expression nullability
+    // AST gives us node types. pg_proc tells us which functions are strict
+    // (null in → null out). Together they replace hardcoded function lists.
+    //
+    // We need to know which SOURCE columns (not result columns) are nullable.
+    // Query pg_attribute for all tables referenced in the query.
+    const sourceNullableCols = yield* resolveSourceNullableColumns(client, sql);
+
     const exprNullable = yield* Effect.tryPromise({
-      try: () => detectNullableExpressions(sql),
+      try: () => detectNullableExpressions(sql, client, sourceNullableCols),
       catch: () => new PgQueryError({ sql: "<ast-parse>", cause: "AST parse failed" }),
     }).pipe(Effect.orElseSucceed(() => new Set<number>()));
 
     for (const idx of exprNullable) {
-      if (columns[idx]?.tableOID === 0) {
-        nullable[idx] = true;
-      }
+      nullable[idx] = true;
     }
 
     // Layer 4: for remaining tableOID=0 columns, check if a column
@@ -496,6 +500,65 @@ function extractAliasFromOutput(ref: string): string | null {
 }
 
 // ── Param nullability for INSERT/SET ────────────────────────────────────────
+
+/**
+ * Get all nullable column names from all tables referenced in the SQL.
+ * Parses the SQL to find table names, resolves via pg_class + pg_attribute.
+ * Used to feed the AST analyzer for function null propagation.
+ */
+const resolveSourceNullableColumns = (
+  client: pg.Client,
+  sql: string,
+): Effect.Effect<Set<string>, PgQueryError> =>
+  Effect.gen(function* () {
+    // Extract table names from the SQL AST
+    const tableNames = yield* Effect.tryPromise({
+      try: async () => {
+        const pgParser = await import("libpg-query");
+        await pgParser.loadModule();
+        const ast = pgParser.parseSync(sql);
+        const names = new Set<string>();
+        collectTableNames(ast, names);
+        return [...names];
+      },
+      catch: () => new PgQueryError({ sql, cause: "table name extraction failed" }),
+    }).pipe(Effect.orElseSucceed(() => [] as string[]));
+
+    if (tableNames.length === 0) return new Set<string>();
+
+    // Resolve table names → nullable columns in one query
+    const { rows } = yield* queryEffect<{ attname: string }>(
+      client,
+      `SELECT DISTINCT a.attname
+       FROM pg_attribute a
+       JOIN pg_class c ON c.oid = a.attrelid
+       WHERE c.relname = ANY($1)
+         AND a.attnum > 0
+         AND NOT a.attisdropped
+         AND NOT a.attnotnull`,
+      [tableNames],
+    );
+
+    return new Set(rows.map((r) => r.attname.toLowerCase()));
+  });
+
+/** Walk AST to find all table names referenced in FROM/JOIN clauses. */
+function collectTableNames(node: any, names: Set<string>): void {
+  if (node === null || node === undefined || typeof node !== "object") return;
+
+  // RangeVar is a table reference in FROM/JOIN
+  if (node.RangeVar?.relname) {
+    names.add(node.RangeVar.relname);
+  }
+
+  for (const val of Object.values(node)) {
+    if (Array.isArray(val)) {
+      for (const item of val) collectTableNames(item, names);
+    } else if (typeof val === "object" && val !== null) {
+      collectTableNames(val, names);
+    }
+  }
+}
 
 /** Find the OID of the table targeted by an INSERT/UPDATE. */
 const findTableOID = (

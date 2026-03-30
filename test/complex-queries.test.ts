@@ -369,18 +369,16 @@ describe("complex queries — correctness", () => {
       expect(cols["bio"]!.nullable).toBe(false);
     });
 
-    it("? overrides false negative: upper(nullable_col)", async () => {
-      // upper(bio) where bio is nullable
-      // Without ?: tool says not nullable (doesn't trace through functions)
-      // With ?: forced nullable (correct, upper(NULL) = NULL)
+    it("upper(nullable) auto-detected via pg_proc.proisstrict", async () => {
+      // upper is strict → null in = null out → bio nullable → result nullable
+      // No ? override needed
       const { cols } = await describe_("override_func_on_nullable");
       expect(cols["display_bio"]!.nullable).toBe(true);
     });
 
-    it("? overrides false negative: coalesce(nullable, nullable)", async () => {
-      // coalesce(bio, notes) where both can be null
-      // Without ?: tool says not nullable (CoalesceExpr = safe)
-      // With ?: forced nullable (correct, all args could be null)
+    it("coalesce(nullable, nullable) auto-detected via AST arg analysis", async () => {
+      // Both args are nullable ColumnRefs → coalesce can return null
+      // No ? override needed
       const { cols } = await describe_("override_coalesce_both_null");
       expect(cols["fallback"]!.nullable).toBe(true);
     });

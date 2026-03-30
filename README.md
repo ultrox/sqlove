@@ -202,21 +202,23 @@ Columns with `NOT NULL` in `pg_attribute` are non-nullable. Columns without it a
 ### Layer 2: Outer joins
 `EXPLAIN (GENERIC_PLAN)` gives us the query plan tree. We walk it to find which table aliases are on the nullable side of `LEFT`/`RIGHT`/`FULL` joins. Same approach as [Squirrel](https://github.com/giacomocavalieri/squirrel). Handles schema-qualified names, subqueries, CTEs, LATERAL, nested parens — Postgres resolves everything, we just read the plan.
 
-### Layer 3: Expression nullability (AST)
-[`libpg-query`](https://github.com/constructive-io/libpg-query-node) — Postgres's own C parser compiled to WASM — parses the SQL into a typed AST. We check node types instead of regex-matching strings:
+### Layer 3: Expression nullability (AST + `pg_proc.proisstrict`)
+[`libpg-query`](https://github.com/constructive-io/libpg-query-node) — Postgres's own C parser compiled to WASM — parses the SQL into a typed AST. [`pg_proc.proisstrict`](https://www.postgresql.org/docs/current/catalog-pg-proc.html) tells us which functions return NULL on NULL input (strict functions). Together they handle function null propagation without hardcoded lists:
 
-| SQL expression | AST node | Nullable? |
+| SQL expression | How detected | Nullable? |
 |---|---|---|
-| `max(x)`, `min(x)`, `sum(x)`, `avg(x)` | `FuncCall` | ✅ null on zero rows |
-| `string_agg(x, ',')`, `array_agg(x)` | `FuncCall` | ✅ null on zero rows |
-| `count(*)`, `count(x)` | `FuncCall` | ❌ always returns a number |
-| `coalesce(x, default)` | `CoalesceExpr` | ❌ explicitly removes null |
+| `upper(bio)`, `abs(age)`, `trim(x)` | `pg_proc.proisstrict` + nullable arg | ✅ strict fn, null propagates |
+| `upper(name)` (NOT NULL col) | `pg_proc.proisstrict` + non-null arg | ❌ strict fn, but arg is non-null |
+| `age + 1` (nullable col) | operator → `pg_proc.proisstrict` | ✅ arithmetic propagates null |
+| `max(x)`, `min(x)`, `sum(x)`, `avg(x)` | `FuncCall` (SQL spec) | ✅ null on zero rows |
+| `string_agg(x, ',')`, `array_agg(x)` | `FuncCall` (SQL spec) | ✅ null on zero rows |
+| `count(*)`, `count(x)` | `FuncCall` (SQL spec) | ❌ always returns a number |
+| `coalesce(x, default)` | `CoalesceExpr` + arg analysis | ❌ at least one non-null arg |
+| `coalesce(nullable, nullable)` | `CoalesceExpr` + arg analysis | ✅ ALL args nullable |
 | `metadata->>'key'`, `data->'key'` | `A_Expr(->>/->)` | ✅ key might not exist |
 | `NULLIF(a, b)` | `A_Expr(NULLIF)` | ✅ null when equal |
 | `CASE WHEN x THEN y END` | `CaseExpr` | ✅ no ELSE = implicit null |
-| `CASE WHEN x THEN y ELSE NULL END` | `CaseExpr` | ✅ explicit null |
-| `lag(x) OVER (...)` | `FuncCall` + OVER | ✅ null at first row |
-| `lead(x) OVER (...)` | `FuncCall` + OVER | ✅ null at last row |
+| `lag(x) OVER (...)`, `lead(x)` | `FuncCall` + OVER | ✅ null at boundary |
 | `sum(x) OVER (...)` | `FuncCall` + OVER | ❌ window partition always has rows |
 | `(SELECT x FROM t LIMIT 1)` | `SubLink` | ✅ null on no match |
 | `x::type` | `TypeCast` | inherits inner |
@@ -251,14 +253,10 @@ SELECT id, bio AS "bio!" FROM users WHERE bio IS NOT NULL
 
 **False negative — tool says not nullable, but it can be null:**
 ```sql
--- upper(bio) where bio is nullable. upper(NULL) = NULL.
--- Tool doesn't trace nullability through function arguments.
-SELECT id, upper(bio) AS "display_bio?" FROM users
-
--- coalesce(bio, notes) where BOTH can be null.
--- Tool assumes CoalesceExpr is always safe. Wrong here.
-SELECT u.id, coalesce(u.bio, o.notes) AS "fallback?"
-FROM users u LEFT JOIN orders o ON o.user_id = u.id
+-- Custom function that can return null for non-null inputs.
+-- pg_proc.proisstrict says "strict" but the function might
+-- still return null based on internal logic. Rare.
+SELECT id, my_custom_func(name) AS "result?" FROM users
 ```
 
 ### Known limitations
@@ -266,10 +264,8 @@ FROM users u LEFT JOIN orders o ON o.user_id = u.id
 | Pattern | What the tool does | Reality |
 |---|---|---|
 | `WHERE col IS NOT NULL` | Says nullable (from schema) | Not nullable (WHERE filters) |
-| `func(nullable_col)` | Says not nullable | Nullable if func propagates null |
-| `coalesce(null1, null2)` | Says not nullable | Nullable if ALL args can be null |
-| Custom / user-defined function | Says not nullable | Depends on the function |
-| `a + b` where either is null | Says not nullable | Nullable (null arithmetic) |
+| Non-strict custom function returning null | Says not nullable | Depends on function logic |
+| Strict function returning null on non-null input | Says not nullable | Rare but possible |
 
 ---
 

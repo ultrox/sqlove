@@ -224,14 +224,31 @@ We went through several iterations:
 6. **libpg-query AST** — Postgres's own C parser compiled to WASM. Parses SQL into typed AST nodes. `FuncCall`, `CaseExpr`, `SubLink`, `A_Expr` — we check node types, not strings. Can't be wrong about what the SQL means because the parser IS Postgres.
 
 The final stack:
+- **pg_attribute.attnotnull** for table column constraints
 - **EXPLAIN GENERIC_PLAN** for join nullability (alias-based plan tree walk)
-- **libpg-query AST** for expression nullability (typed node checks)
+- **libpg-query AST + pg_proc.proisstrict** for expression nullability
 - **pg_attribute by name** for CTE/subquery column passthrough
 - **`?`/`!` suffixes** as user override escape hatch for anything we miss
 
-The key insight from iteration #5→#6: we were regex-matching strings that Postgres generated from its own AST. Why match the string output when we can read the AST directly? The WASM parser adds ~35KB to the package and loads in <1ms. No C compiler needed, no platform-specific builds.
+### The pg_proc.proisstrict discovery
 
-`?` and `!` suffixes still exist for edge cases (custom functions, recursive arithmetic nullability) but the three patterns that originally motivated them — aggregates, JSONB operators, CTEs — are now detected automatically.
+The biggest breakthrough came from researching how PostgreSQL's own planner handles nullability internally. The planner doesn't use hardcoded function lists — it checks `pg_proc.proisstrict` for every function and operator.
+
+`proisstrict = true` means "this function returns NULL if ANY argument is NULL." It's enforced at the executor level (`ExecInterpExpr`), not by function authors. The guarantee is ironclad. About 60-65% of PostgreSQL's ~3,200 built-in functions are strict — covering all arithmetic operators, all string functions (`upper`, `lower`, `trim`, etc.), all comparison operators, and most type casts.
+
+Before this discovery, we maintained a hardcoded list of nullable aggregates (`max`, `min`, `sum`, `avg`, `string_agg`, `array_agg`...) and had no way to handle `upper(nullable_col)` or `age + 1` where `age` is nullable. Adding every function by name was a losing game.
+
+After: one `pg_proc` query per SQL file, cached per session. Every function — built-in, extension, or user-defined — is covered. The AST gives us the expression structure (what functions are called, what their arguments are). `pg_proc.proisstrict` tells us how they propagate null. No lists to maintain.
+
+This also fixed `coalesce(nullable, nullable)`: the AST now recursively checks if ALL coalesce arguments are nullable (via `ColumnRef` → nullable source column lookup), and only then marks the result as nullable. Previously we assumed coalesce always removes null — wrong when all arguments can be null.
+
+The key insight from the research: PostgreSQL already contains a sound core for nullability inference. It's just not exposed through any SQL interface or protocol message. By querying `pg_proc`, `pg_attribute`, and the EXPLAIN plan, we reconstruct the same reasoning the planner does internally.
+
+### Iteration 7: what didn't work and why
+
+We also considered WHERE clause narrowing (`WHERE bio IS NOT NULL` → mark `bio` as non-null in results). The StarRocks approach (substitute NULL, constant-fold, check if FALSE) is clean and handles AND/OR correctly. But implementing it creates an inconsistent UX: sometimes the tool narrows, sometimes it doesn't (nested predicates, OR branches, subqueries). Users would have to know the detection rules to predict the output. We decided "always use `!` when you know better" is a simpler, more consistent contract than "the tool sometimes figures it out."
+
+`?` and `!` suffixes remain for: WHERE-based narrowing, custom functions whose behavior we can't catalog-check, and any edge case we haven't anticipated.
 
 ### Snapshot tests need guardrails
 
