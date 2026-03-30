@@ -14,7 +14,7 @@ SELECT
   ct.id,
   ct.name,
   ct.depth,
-  ct.parent_id AS "parent_id?",
+  ct.parent_id,
   count(p.id)::int AS product_count
 FROM cat_tree ct
 LEFT JOIN products p ON p.category_id = ct.id

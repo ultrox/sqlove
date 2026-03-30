@@ -113,7 +113,7 @@ describe("complex queries — correctness", () => {
       expect(cols["role"]!.tsType.enumDef).toBeDefined();
     });
 
-    it("max() on LEFT JOIN uses ? suffix", async () => {
+    it("max() on LEFT JOIN is nullable (no rows → null)", async () => {
       const { cols } = await describe_("user_dashboard");
       expect(cols["last_order_at"]!.nullable).toBe(true);
     });
@@ -128,7 +128,7 @@ describe("complex queries — correctness", () => {
   // ── category_tree ──────────────────────────────────────
 
   describe("category_tree (recursive CTE)", () => {
-    it("CTE column uses ? suffix", async () => {
+    it("CTE column inherits nullability from source table", async () => {
       const { cols } = await describe_("category_tree");
       expect(cols["parent_id"]!.nullable).toBe(true);
     });
@@ -195,7 +195,7 @@ describe("complex queries — correctness", () => {
   // ── jsonb_query ────────────────────────────────────────
 
   describe("jsonb_query", () => {
-    it("jsonb ->> uses ? suffix", async () => {
+    it("jsonb ->> is always nullable (key might not exist)", async () => {
       const { cols } = await describe_("jsonb_query");
       expect(cols["department"]!.nullable).toBe(true);
       expect(cols["level"]!.nullable).toBe(true);
@@ -293,6 +293,37 @@ describe("complex queries — correctness", () => {
     });
   });
 
+  // ── Expression nullability edge cases ───────────────────
+
+  describe("expression nullability", () => {
+    it("CASE WHEN ... ELSE NULL is nullable", async () => {
+      const { cols } = await describe_("expr_case_null");
+      expect(cols["maybe_name"]!.nullable).toBe(true);
+    });
+
+    it("NULLIF is nullable", async () => {
+      const { cols } = await describe_("expr_nullif");
+      expect(cols["name_or_null"]!.nullable).toBe(true);
+    });
+
+    it("string_agg and array_agg are nullable (zero rows → null)", async () => {
+      const { cols } = await describe_("expr_string_agg");
+      expect(cols["all_notes"]!.nullable).toBe(true);
+      expect(cols["totals"]!.nullable).toBe(true);
+    });
+
+    it("lag() and lead() are nullable (boundary → null)", async () => {
+      const { cols } = await describe_("expr_window_lag");
+      expect(cols["prev_name"]!.nullable).toBe(true);
+      expect(cols["next_name"]!.nullable).toBe(true);
+    });
+
+    it("scalar subquery is nullable (no match → null)", async () => {
+      const { cols } = await describe_("expr_scalar_subquery");
+      expect(cols["manager_email"]!.nullable).toBe(true);
+    });
+  });
+
   // ── ?/! suffixes ───────────────────────────────────────
 
   describe("nullability suffixes", () => {
@@ -324,6 +355,34 @@ describe("complex queries — correctness", () => {
       const { cols } = await describe_("override_jsonb_nullable");
       expect(cols["department"]!.nullable).toBe(true);
       expect(cols["level"]!.nullable).toBe(true);
+    });
+  });
+
+  // ── Override correcting tool mistakes ──────────────────
+
+  describe("overrides correcting auto-detection", () => {
+    it("! overrides false positive: WHERE bio IS NOT NULL", async () => {
+      // bio is nullable in the table, but WHERE filters nulls out
+      // Without !: tool says nullable (wrong for this query)
+      // With !: forced non-null (correct)
+      const { cols } = await describe_("override_where_not_null");
+      expect(cols["bio"]!.nullable).toBe(false);
+    });
+
+    it("? overrides false negative: upper(nullable_col)", async () => {
+      // upper(bio) where bio is nullable
+      // Without ?: tool says not nullable (doesn't trace through functions)
+      // With ?: forced nullable (correct, upper(NULL) = NULL)
+      const { cols } = await describe_("override_func_on_nullable");
+      expect(cols["display_bio"]!.nullable).toBe(true);
+    });
+
+    it("? overrides false negative: coalesce(nullable, nullable)", async () => {
+      // coalesce(bio, notes) where both can be null
+      // Without ?: tool says not nullable (CoalesceExpr = safe)
+      // With ?: forced nullable (correct, all args could be null)
+      const { cols } = await describe_("override_coalesce_both_null");
+      expect(cols["fallback"]!.nullable).toBe(true);
     });
   });
 });

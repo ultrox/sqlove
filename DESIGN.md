@@ -214,25 +214,24 @@ In a fully Effect-based server (e.g., @effect/platform HTTP), this bridge wouldn
 - **CTE columns** — lose their table metadata. `tableOID = 0`.
 - **Runtime parameter values** — `WHERE ($1 IS NULL OR c.id = $1)` changes join behavior depending on the value. `GENERIC_PLAN` handles this correctly by not optimizing for specific values.
 
-We went through several iterations on the join detection:
+We went through several iterations:
 
 1. **Regex on SQL** — broke on schema-qualified names (`public.orders`), subqueries, CTEs, and comments containing `LEFT JOIN`.
 2. **EXPLAIN with NULL params** — plan collapsed (`WHERE id = NULL` → always false, no join nodes).
 3. **EXPLAIN with dummy typed values** — Postgres optimized LEFT→INNER when filtering on nullable side.
-4. **EXPLAIN (GENERIC_PLAN)** — Postgres 16+ option. Gives the plan without knowing parameter values. No collapse, no optimization artifacts. Same approach Squirrel uses. This is what we ship.
+4. **EXPLAIN (GENERIC_PLAN)** — Postgres 16+ option. Gives the plan without knowing parameter values. No collapse, no optimization artifacts. Same approach Squirrel uses.
+5. **Regex on EXPLAIN Output strings** — detected `max(`, `->>`, `NULLIF`, etc. by pattern matching the plan's Output entries. Worked but fragile — same problem as #1, just one level up.
+6. **libpg-query AST** — Postgres's own C parser compiled to WASM. Parses SQL into typed AST nodes. `FuncCall`, `CaseExpr`, `SubLink`, `A_Expr` — we check node types, not strings. Can't be wrong about what the SQL means because the parser IS Postgres.
 
-For the cases we can't detect (aggregates, JSONB, CTEs), we added `?` and `!` suffixes on column aliases — same escape hatch as Squirrel:
+The final stack:
+- **EXPLAIN GENERIC_PLAN** for join nullability (alias-based plan tree walk)
+- **libpg-query AST** for expression nullability (typed node checks)
+- **pg_attribute by name** for CTE/subquery column passthrough
+- **`?`/`!` suffixes** as user override escape hatch for anything we miss
 
-```sql
--- Force nullable: tool can't know max() returns null on empty
-SELECT max(o.created_at) AS "last_order_at?"
-FROM users u LEFT JOIN orders o ON o.user_id = u.id
+The key insight from iteration #5→#6: we were regex-matching strings that Postgres generated from its own AST. Why match the string output when we can read the AST directly? The WASM parser adds ~35KB to the package and loads in <1ms. No C compiler needed, no platform-specific builds.
 
--- Force non-null: you know bio is always set for active users
-SELECT bio AS "bio!" FROM users WHERE active = true
-```
-
-The suffix is stripped from the column name. Postgres never sees it. One character, explicit, no magic.
+`?` and `!` suffixes still exist for edge cases (custom functions, recursive arithmetic nullability) but the three patterns that originally motivated them — aggregates, JSONB operators, CTEs — are now detected automatically.
 
 ### Snapshot tests need guardrails
 

@@ -192,30 +192,84 @@ Falls back to `arg1`, `arg2` when it can't infer.
 
 ---
 
-## Nullability overrides — `?` and `!`
+## Nullability detection
 
-sqlove detects nullable columns from table constraints and join types. But some cases can't be detected automatically:
+sqlove detects nullable columns automatically across four layers:
 
-- `max()` on a LEFT JOIN — returns null when no rows match
-- `metadata->>'key'` — null if key doesn't exist
-- CTE columns — lose table metadata
+### Layer 1: Table constraints
+Columns with `NOT NULL` in `pg_attribute` are non-nullable. Columns without it are nullable. This covers most cases.
 
-For these, add `?` or `!` to the column alias:
+### Layer 2: Outer joins
+`EXPLAIN (GENERIC_PLAN)` gives us the query plan tree. We walk it to find which table aliases are on the nullable side of `LEFT`/`RIGHT`/`FULL` joins. Same approach as [Squirrel](https://github.com/giacomocavalieri/squirrel). Handles schema-qualified names, subqueries, CTEs, LATERAL, nested parens — Postgres resolves everything, we just read the plan.
+
+### Layer 3: Expression nullability (AST)
+[`libpg-query`](https://github.com/constructive-io/libpg-query-node) — Postgres's own C parser compiled to WASM — parses the SQL into a typed AST. We check node types instead of regex-matching strings:
+
+| SQL expression | AST node | Nullable? |
+|---|---|---|
+| `max(x)`, `min(x)`, `sum(x)`, `avg(x)` | `FuncCall` | ✅ null on zero rows |
+| `string_agg(x, ',')`, `array_agg(x)` | `FuncCall` | ✅ null on zero rows |
+| `count(*)`, `count(x)` | `FuncCall` | ❌ always returns a number |
+| `coalesce(x, default)` | `CoalesceExpr` | ❌ explicitly removes null |
+| `metadata->>'key'`, `data->'key'` | `A_Expr(->>/->)` | ✅ key might not exist |
+| `NULLIF(a, b)` | `A_Expr(NULLIF)` | ✅ null when equal |
+| `CASE WHEN x THEN y END` | `CaseExpr` | ✅ no ELSE = implicit null |
+| `CASE WHEN x THEN y ELSE NULL END` | `CaseExpr` | ✅ explicit null |
+| `lag(x) OVER (...)` | `FuncCall` + OVER | ✅ null at first row |
+| `lead(x) OVER (...)` | `FuncCall` + OVER | ✅ null at last row |
+| `sum(x) OVER (...)` | `FuncCall` + OVER | ❌ window partition always has rows |
+| `(SELECT x FROM t LIMIT 1)` | `SubLink` | ✅ null on no match |
+| `x::type` | `TypeCast` | inherits inner |
+
+### Layer 4: CTE / subquery passthrough
+Columns from CTEs and subqueries lose their `tableOID`. For these, we check `pg_attribute` by column name — if any table in the database has that column as nullable, we mark it nullable.
+
+### Layer 5: Manual override — `?` and `!`
+
+For edge cases the tool can't detect, add `?` or `!` to the column alias:
 
 ```sql
--- Force nullable: max() can return null on empty LEFT JOIN
-SELECT max(o.created_at) AS "last_order_at?"
-FROM users u LEFT JOIN orders o ON o.user_id = u.id
-GROUP BY u.id
+-- Force nullable
+SELECT custom_function(x) AS "result?" FROM t
 
--- Force nullable: jsonb key might not exist
-SELECT metadata->>'department' AS "department?" FROM users
-
--- Force non-null: you know bio is always set here
+-- Force non-null (you know it's always set)
 SELECT bio AS "bio!" FROM users WHERE active = true
 ```
 
-The suffix is stripped from the generated field name. Postgres never sees it. One character, explicit, no magic. Same approach as [Squirrel](https://github.com/giacomocavalieri/squirrel).
+The suffix is stripped from the generated field name. Postgres never sees it.
+
+### When to use overrides
+
+The tool can be wrong in both directions. Use `!` and `?` to correct it:
+
+**False positive — tool says nullable, you know it's not:**
+```sql
+-- bio is nullable in the table, but WHERE filters nulls out.
+-- Tool checks pg_attribute, sees nullable. Wrong for this query.
+SELECT id, bio AS "bio!" FROM users WHERE bio IS NOT NULL
+```
+
+**False negative — tool says not nullable, but it can be null:**
+```sql
+-- upper(bio) where bio is nullable. upper(NULL) = NULL.
+-- Tool doesn't trace nullability through function arguments.
+SELECT id, upper(bio) AS "display_bio?" FROM users
+
+-- coalesce(bio, notes) where BOTH can be null.
+-- Tool assumes CoalesceExpr is always safe. Wrong here.
+SELECT u.id, coalesce(u.bio, o.notes) AS "fallback?"
+FROM users u LEFT JOIN orders o ON o.user_id = u.id
+```
+
+### Known limitations
+
+| Pattern | What the tool does | Reality |
+|---|---|---|
+| `WHERE col IS NOT NULL` | Says nullable (from schema) | Not nullable (WHERE filters) |
+| `func(nullable_col)` | Says not nullable | Nullable if func propagates null |
+| `coalesce(null1, null2)` | Says not nullable | Nullable if ALL args can be null |
+| Custom / user-defined function | Says not nullable | Depends on the function |
+| `a + b` where either is null | Says not nullable | Nullable (null arithmetic) |
 
 ---
 

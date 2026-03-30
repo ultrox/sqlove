@@ -62,8 +62,8 @@ export const arrayColumn: Effect.Effect<
 /** Rows returned by {@link categoryTree}.
  *  @see `/sql/category_tree.sql` */
 export class CategoryTreeRow extends Schema.Class<CategoryTreeRow>("CategoryTreeRow")({
-  id: Schema.Number,
-  name: Schema.String,
+  id: Schema.NullOr(Schema.Number),
+  name: Schema.NullOr(Schema.String),
   depth: Schema.Number,
   parentId: Schema.propertySignature(Schema.NullOr(Schema.Number)).pipe(Schema.fromKey("parent_id")),
   productCount: Schema.propertySignature(Schema.Number).pipe(Schema.fromKey("product_count")),
@@ -93,7 +93,7 @@ SELECT
   ct.id,
   ct.name,
   ct.depth,
-  ct.parent_id AS "parent_id?",
+  ct.parent_id,
   count(p.id)::int AS product_count
 FROM cat_tree ct
 LEFT JOIN products p ON p.category_id = ct.id
@@ -164,6 +164,126 @@ export const enumColumn = (
   SqlClient.pipe(Effect.flatMap((sql) =>
     sql<EnumColumnRow>`SELECT id, name, role FROM users WHERE role = ${params.role}::user_role`
   ));
+
+/** Rows returned by {@link exprCaseNull}.
+ *  @see `/sql/expr_case_null.sql` */
+export class ExprCaseNullRow extends Schema.Class<ExprCaseNullRow>("ExprCaseNullRow")({
+  id: Schema.Number,
+  maybeName: Schema.propertySignature(Schema.NullOr(Schema.String)).pipe(Schema.fromKey("maybe_name")),
+}) {}
+
+/**
+ * CASE with ELSE NULL is always nullable.
+ * @see `/sql/expr_case_null.sql`
+ */
+export const exprCaseNull = (
+  params: {
+    readonly id: number;
+  }
+): Effect.Effect<ReadonlyArray<ExprCaseNullRow>, SqlError, SqlClient> =>
+  SqlClient.pipe(Effect.flatMap((sql) =>
+    sql<ExprCaseNullRow>`SELECT
+  id,
+  CASE WHEN active THEN name ELSE NULL END AS maybe_name
+FROM users
+WHERE id = ${params.id}`
+  ));
+
+/** Rows returned by {@link exprNullif}.
+ *  @see `/sql/expr_nullif.sql` */
+export class ExprNullifRow extends Schema.Class<ExprNullifRow>("ExprNullifRow")({
+  id: Schema.Number,
+  nameOrNull: Schema.propertySignature(Schema.NullOr(Schema.String)).pipe(Schema.fromKey("name_or_null")),
+}) {}
+
+/**
+ * NULLIF returns null when both args are equal.
+ * @see `/sql/expr_nullif.sql`
+ */
+export const exprNullif = (
+  params: {
+    readonly id: number;
+  }
+): Effect.Effect<ReadonlyArray<ExprNullifRow>, SqlError, SqlClient> =>
+  SqlClient.pipe(Effect.flatMap((sql) =>
+    sql<ExprNullifRow>`SELECT id, NULLIF(name, 'deleted') AS name_or_null
+FROM users
+WHERE id = ${params.id}`
+  ));
+
+/** Rows returned by {@link exprScalarSubquery}.
+ *  @see `/sql/expr_scalar_subquery.sql` */
+export class ExprScalarSubqueryRow extends Schema.Class<ExprScalarSubqueryRow>("ExprScalarSubqueryRow")({
+  name: Schema.String,
+  managerEmail: Schema.propertySignature(Schema.NullOr(Schema.String)).pipe(Schema.fromKey("manager_email")),
+}) {}
+
+/**
+ * Scalar subquery can return null when no row matches.
+ * @see `/sql/expr_scalar_subquery.sql`
+ */
+export const exprScalarSubquery = (
+  params: {
+    readonly id: number;
+  }
+): Effect.Effect<ReadonlyArray<ExprScalarSubqueryRow>, SqlError, SqlClient> =>
+  SqlClient.pipe(Effect.flatMap((sql) =>
+    sql<ExprScalarSubqueryRow>`SELECT
+  u.name,
+  (SELECT email FROM users u2 WHERE u2.id = u.manager_id) AS manager_email
+FROM users u
+WHERE u.id = ${params.id}`
+  ));
+
+/** Rows returned by {@link exprStringAgg}.
+ *  @see `/sql/expr_string_agg.sql` */
+export class ExprStringAggRow extends Schema.Class<ExprStringAggRow>("ExprStringAggRow")({
+  id: Schema.Number,
+  allNotes: Schema.propertySignature(Schema.NullOr(Schema.String)).pipe(Schema.fromKey("all_notes")),
+  totals: Schema.NullOr(Schema.Array(Schema.String)),
+}) {}
+
+/**
+ * string_agg and array_agg return null on zero rows.
+ * @see `/sql/expr_string_agg.sql`
+ */
+export const exprStringAgg: Effect.Effect<
+  ReadonlyArray<ExprStringAggRow>,
+  SqlError,
+  SqlClient
+> = SqlClient.pipe(Effect.flatMap((sql) =>
+  sql<ExprStringAggRow>`SELECT
+  u.id,
+  string_agg(o.notes, ', ') AS all_notes,
+  array_agg(o.total) AS totals
+FROM users u
+LEFT JOIN orders o ON o.user_id = u.id
+GROUP BY u.id`
+));
+
+/** Rows returned by {@link exprWindowLag}.
+ *  @see `/sql/expr_window_lag.sql` */
+export class ExprWindowLagRow extends Schema.Class<ExprWindowLagRow>("ExprWindowLagRow")({
+  name: Schema.String,
+  prevName: Schema.propertySignature(Schema.NullOr(Schema.String)).pipe(Schema.fromKey("prev_name")),
+  nextName: Schema.propertySignature(Schema.NullOr(Schema.String)).pipe(Schema.fromKey("next_name")),
+}) {}
+
+/**
+ * lag() and lead() return null at boundaries.
+ * @see `/sql/expr_window_lag.sql`
+ */
+export const exprWindowLag: Effect.Effect<
+  ReadonlyArray<ExprWindowLagRow>,
+  SqlError,
+  SqlClient
+> = SqlClient.pipe(Effect.flatMap((sql) =>
+  sql<ExprWindowLagRow>`SELECT
+  name,
+  lag(name) OVER (ORDER BY id) AS prev_name,
+  lead(name) OVER (ORDER BY id) AS next_name
+FROM users`
+));
 
 /** Rows returned by {@link fullJoin}.
  *  @see `/sql/full_join.sql` */
@@ -532,9 +652,9 @@ export const jsonbQuery = (
     sql<JsonbQueryRow>`SELECT
   id,
   name,
-  metadata->>'department' AS "department?",
-  metadata->>'level' AS "level?",
-  (metadata->>'salary')::numeric AS "salary?"
+  metadata->>'department' AS department,
+  metadata->>'level' AS level,
+  (metadata->>'salary')::numeric AS salary
 FROM users
 WHERE metadata @> ${params.arg1}::jsonb`
   ));
@@ -733,6 +853,30 @@ LEFT JOIN orders o ON o.user_id = u.id
 GROUP BY u.id`
 ));
 
+/** Rows returned by {@link overrideCoalesceBothNull}.
+ *  @see `/sql/override_coalesce_both_null.sql` */
+export class OverrideCoalesceBothNullRow extends Schema.Class<OverrideCoalesceBothNullRow>("OverrideCoalesceBothNullRow")({
+  id: Schema.Number,
+  fallback: Schema.NullOr(Schema.String),
+}) {}
+
+/**
+ * coalesce(bio, notes) where both are nullable.
+ * Tool says not nullable (CoalesceExpr → not nullable).
+ * But if ALL args are null, result is null. Use ? to correct.
+ * @see `/sql/override_coalesce_both_null.sql`
+ */
+export const overrideCoalesceBothNull = (
+  params: {
+    readonly id: number;
+  }
+): Effect.Effect<ReadonlyArray<OverrideCoalesceBothNullRow>, SqlError, SqlClient> =>
+  SqlClient.pipe(Effect.flatMap((sql) =>
+    sql<OverrideCoalesceBothNullRow>`SELECT u.id, coalesce(u.bio, o.notes) AS "fallback?" 
+FROM users u LEFT JOIN orders o ON o.user_id = u.id
+WHERE u.id = ${params.id}`
+  ));
+
 /** Rows returned by {@link overrideCteNullable}.
  *  @see `/sql/override_cte_nullable.sql` */
 export class OverrideCteNullableRow extends Schema.Class<OverrideCteNullableRow>("OverrideCteNullableRow")({
@@ -801,6 +945,28 @@ LEFT JOIN orders o ON o.user_id = u.id
 GROUP BY u.id`
 ));
 
+/** Rows returned by {@link overrideFuncOnNullable}.
+ *  @see `/sql/override_func_on_nullable.sql` */
+export class OverrideFuncOnNullableRow extends Schema.Class<OverrideFuncOnNullableRow>("OverrideFuncOnNullableRow")({
+  id: Schema.Number,
+  displayBio: Schema.propertySignature(Schema.NullOr(Schema.String)).pipe(Schema.fromKey("display_bio")),
+}) {}
+
+/**
+ * upper(bio) where bio is nullable.
+ * Tool says not nullable (upper is not in nullable aggregates list).
+ * But upper(NULL) = NULL. Use ? to correct.
+ * @see `/sql/override_func_on_nullable.sql`
+ */
+export const overrideFuncOnNullable = (
+  params: {
+    readonly id: number;
+  }
+): Effect.Effect<ReadonlyArray<OverrideFuncOnNullableRow>, SqlError, SqlClient> =>
+  SqlClient.pipe(Effect.flatMap((sql) =>
+    sql<OverrideFuncOnNullableRow>`SELECT id, upper(bio) AS "display_bio?" FROM users WHERE id = ${params.id}`
+  ));
+
 /** Rows returned by {@link overrideJsonbNullable}.
  *  @see `/sql/override_jsonb_nullable.sql` */
 export class OverrideJsonbNullableRow extends Schema.Class<OverrideJsonbNullableRow>("OverrideJsonbNullableRow")({
@@ -826,6 +992,27 @@ export const overrideJsonbNullable = (
 FROM users
 WHERE id = ${params.id}`
   ));
+
+/** Rows returned by {@link overrideWhereNotNull}.
+ *  @see `/sql/override_where_not_null.sql` */
+export class OverrideWhereNotNullRow extends Schema.Class<OverrideWhereNotNullRow>("OverrideWhereNotNullRow")({
+  id: Schema.Number,
+  bio: Schema.String,
+}) {}
+
+/**
+ * bio is nullable in the table, but WHERE filters nulls out.
+ * Tool says nullable (correct per schema, wrong per query).
+ * ! overrides to non-null.
+ * @see `/sql/override_where_not_null.sql`
+ */
+export const overrideWhereNotNull: Effect.Effect<
+  ReadonlyArray<OverrideWhereNotNullRow>,
+  SqlError,
+  SqlClient
+> = SqlClient.pipe(Effect.flatMap((sql) =>
+  sql<OverrideWhereNotNullRow>`SELECT id, bio AS "bio!" FROM users WHERE bio IS NOT NULL`
+));
 
 /** Rows returned by {@link productStats}.
  *  @see `/sql/product_stats.sql` */
@@ -1042,7 +1229,7 @@ export const userDashboard = (
   u.tags,
   count(o.id)::int AS order_count,
   coalesce(sum(o.total), 0)::numeric(10,2) AS total_spent,
-  max(o.created_at) AS "last_order_at?"
+  max(o.created_at) AS last_order_at
 FROM users u
 LEFT JOIN orders o ON o.user_id = u.id AND o.status != 'cancelled'
 WHERE u.id = ${params.id}

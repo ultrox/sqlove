@@ -10,6 +10,8 @@
  * Nullability is resolved in layers:
  *   - pg_attribute.attnotnull for table columns
  *   - EXPLAIN plan tree for outer join sides
+ *   - SQL AST (libpg-query) for expression nullability
+ *   - pg_attribute name lookup for CTE/subquery columns
  *   - ?/! column alias suffixes as user overrides
  *
  * Enums/arrays/domains: delegated to TypeResolver.
@@ -18,6 +20,7 @@
 import pg from "pg";
 import { Effect, Option, Data, Array as Arr } from "effect";
 import { TypeResolver } from "./type-map.js";
+import { detectNullableExpressions } from "./sql-ast.js";
 import type {
   EnumDef,
   ParsedQuery,
@@ -326,32 +329,76 @@ const resolveNullability = (
       .map((c, i) => ({ ...c, idx: i }))
       .filter((c) => c.tableOID !== 0 && c.columnID !== 0);
 
-    if (tableCols.length === 0) return nullable;
-
     // Layer 1: column-level NOT NULL from pg_attribute
-    const pairs = tableCols.map((c) => `(${c.tableOID}, ${c.columnID})`);
-    const { rows } = yield* queryEffect<{
-      attrelid: number;
-      attnum: number;
-      attnotnull: boolean;
-    }>(
-      client,
-      `SELECT attrelid::int, attnum::int, attnotnull
-       FROM pg_attribute WHERE (attrelid, attnum) IN (${pairs.join(",")})`,
-    );
+    if (tableCols.length > 0) {
+      const pairs = tableCols.map((c) => `(${c.tableOID}, ${c.columnID})`);
+      const { rows } = yield* queryEffect<{
+        attrelid: number;
+        attnum: number;
+        attnotnull: boolean;
+      }>(
+        client,
+        `SELECT attrelid::int, attnum::int, attnotnull
+         FROM pg_attribute WHERE (attrelid, attnum) IN (${pairs.join(",")})`,
+      );
 
-    const notNull = new Map<string, boolean>();
-    for (const r of rows) notNull.set(`${r.attrelid}:${r.attnum}`, r.attnotnull);
+      const notNull = new Map<string, boolean>();
+      for (const r of rows) notNull.set(`${r.attrelid}:${r.attnum}`, r.attnotnull);
 
-    for (const c of tableCols) {
-      nullable[c.idx] = !(notNull.get(`${c.tableOID}:${c.columnID}`) ?? false);
+      for (const c of tableCols) {
+        nullable[c.idx] = !(notNull.get(`${c.tableOID}:${c.columnID}`) ?? false);
+      }
     }
 
-    // Layer 2: outer join nullability from EXPLAIN plan
-    // resolveJoinNullability is infallible — EXPLAIN failures → empty set
+    // Layer 2: EXPLAIN plan for outer join nullability
+    // Infallible — EXPLAIN failures → empty set
     const joinNullable = yield* resolveJoinNullability(client, columns, sql);
     for (const idx of joinNullable) {
       nullable[idx] = true;
+    }
+
+    // Layer 3: SQL AST for expression nullability
+    // libpg-query parses the SQL into a typed AST — no regex
+    const exprNullable = yield* Effect.tryPromise({
+      try: () => detectNullableExpressions(sql),
+      catch: () => new PgQueryError({ sql: "<ast-parse>", cause: "AST parse failed" }),
+    }).pipe(Effect.orElseSucceed(() => new Set<number>()));
+
+    for (const idx of exprNullable) {
+      if (columns[idx]?.tableOID === 0) {
+        nullable[idx] = true;
+      }
+    }
+
+    // Layer 4: for remaining tableOID=0 columns, check if a column
+    // with the same name exists in any table and is nullable there
+    // (covers CTEs, subqueries that pass through table columns)
+    const unresolvedCols = columns
+      .map((c, i) => ({ ...c, idx: i }))
+      .filter((c) => c.tableOID === 0 && !nullable[c.idx]);
+
+    if (unresolvedCols.length > 0) {
+      const colNames = unresolvedCols.map((c) => c.name);
+      const { rows } = yield* queryEffect<{
+        attname: string;
+        attnotnull: boolean;
+      }>(
+        client,
+        `SELECT DISTINCT a.attname, a.attnotnull
+         FROM pg_attribute a
+         WHERE a.attname = ANY($1)
+           AND a.attnum > 0
+           AND NOT a.attisdropped
+           AND NOT a.attnotnull`,
+        [colNames],
+      );
+
+      const nullableCols = new Set(rows.map((r) => r.attname));
+      for (const c of unresolvedCols) {
+        if (nullableCols.has(c.name)) {
+          nullable[c.idx] = true;
+        }
+      }
     }
 
     return nullable;
@@ -409,12 +456,6 @@ function nullableIndicesFromPlan(
   return result;
 }
 
-/**
- * At join nodes, collect aliases from the nullable side:
- *   Left  → Inner child is nullable
- *   Right → Outer child is nullable
- *   Full  → both sides nullable
- */
 function collectNullableAliases(node: PlanNode, result: Set<string>): void {
   const joinType = node["Join Type"];
   const plans = node.Plans ?? [];
