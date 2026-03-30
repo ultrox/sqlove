@@ -1,16 +1,23 @@
 # Design Decisions & Open Questions
 
-Raw notes on choices made, alternatives considered, and things still unresolved. Written as we built it, not cleaned up after.
+Raw notes on choices made, alternatives considered, and things
+still unresolved. Written as we built it, updated as we learned.
 
 ---
 
 ## The core insight
 
-The database already knows every type. When you `PREPARE` a statement, Postgres tells you exactly what goes in and what comes out — parameter types, column types, nullability, enums, arrays. That's not a guess. It's the live system.
+The database already knows every type. When you `PREPARE` a
+statement, Postgres tells you exactly what goes in and what
+comes out — parameter types, column types, enums, arrays.
+That's not a guess. It's the live system.
 
-So instead of maintaining types by hand or generating them from a schema file that might be stale, just ask the database. Write SQL, ask Postgres what the types are, generate TypeScript. Done.
+So instead of maintaining types by hand or generating them
+from a schema file that might be stale, just ask the database.
+Write SQL, ask Postgres what the types are, generate TypeScript.
 
-This is what [Squirrel](https://github.com/giacomocavalieri/squirrel) does for Gleam. We ported the philosophy to TypeScript + Effect.
+This is what [Squirrel](https://github.com/giacomocavalieri/squirrel)
+does for Gleam. We ported the philosophy to TypeScript + Effect.
 
 ---
 
@@ -24,9 +31,13 @@ The actual trajectory with ORMs:
 4. Drop into raw queries for the hard stuff
 5. Maintain two mental models forever
 
-The ORM didn't remove SQL from your life. It added a layer. And when something breaks at 3am, you're reading the ORM's source code instead of your query.
+The ORM didn't remove SQL from your life. It added a layer.
+And when something breaks at 3am, you're reading the ORM's
+source code instead of your query.
 
-sqlove deletes the only thing an ORM ever actually saved you: the boilerplate (type definitions, parameter wiring, row decoding). Nothing else. You keep full control.
+sqlove deletes the only thing an ORM ever actually saved you:
+the boilerplate (type definitions, parameter wiring, row
+decoding). Nothing else. You keep full control.
 
 ---
 
@@ -34,49 +45,238 @@ sqlove deletes the only thing an ORM ever actually saved you: the boilerplate (t
 
 ### SQL returns tables. Always.
 
-Every query returns `ReadonlyArray<Row>`. Even `SELECT ... WHERE id = $1` on a primary key. Because SQL returns result sets — that's the model. There's no "return a single row" in SQL.
+Every query returns `ReadonlyArray<Row>`. Even
+`SELECT ... WHERE id = $1` on a primary key. Because SQL
+returns result sets — that's the model.
 
-This means you destructure: `const [user] = yield* getUser({ id: 1 })`.
+This means you destructure:
+`const [user] = yield* getUser({ id: 1 })`.
 
-We considered returning `Option<Row>` for queries that provably return 0 or 1 rows (unique key lookup, `LIMIT 1`). Decided against it for v0.1 — detecting this reliably requires understanding primary keys, unique constraints, and query semantics. Too complex, too easy to get wrong. A wrong `Option` is worse than a correct array.
+We considered returning `Option<Row>` for queries that provably
+return 0 or 1 rows (unique key lookup, `LIMIT 1`). Decided
+against it for v0.1 — detecting this reliably requires
+understanding primary keys, unique constraints, and query
+semantics. A wrong `Option` is worse than a correct array.
 
 ### No-param queries are `const`, param queries are functions
 
 ```ts
-export const listTodos: Effect.Effect<...> = ...           // no params, just a value
-export const getTodo = (params: { ... }): Effect.Effect<...> => ...  // has params, it's a function
+export const listTodos: Effect.Effect<...> = ...
+export const getTodo = (params: { ... }): Effect.Effect<...> => ...
 ```
 
-This means `yield* listTodos` (no parens) vs `yield* getTodo({ id: 1 })` (call it). It reads differently and that's intentional — if there's nothing to pass, don't pretend there is.
+`yield* listTodos` (no parens) vs `yield* getTodo({ id: 1 })`
+(call it). If there's nothing to pass, don't pretend there is.
 
 ### Param names are inferred from SQL context
 
-Instead of `arg1`, `arg2`, we parse the SQL to figure out what `$1` means:
+Instead of `arg1`, `arg2`, we parse the SQL to figure out
+what `$1` means:
 
 - `WHERE email = $1` → `email`
 - `INSERT INTO t (name, email) VALUES ($1, $2)` → `name`, `email`
 - `SET colour = $3` → `colour`
 
-Falls back to `argN` when we can't infer. The inference is heuristic-based (regex on normalized SQL), not a real SQL parser. It works for common patterns. Exotic SQL might get `argN` names.
+Falls back to `argN` when we can't infer. The inference
+uses regex on normalized SQL (not the libpg-query AST — the
+AST is used for nullability, not param naming). Works for
+common patterns. Exotic SQL might get `argN` names.
 
-We debated whether to build or use a proper SQL parser. Decided against it — a regex that handles 90% of cases is better than a dependency that handles 100% but adds complexity. If a name is wrong, you just rename the file or alias in SQL.
+A future improvement: use the AST for param naming too.
+The `ColumnRef` nodes in `WHERE`, `INSERT`, and `SET` clauses
+would give us exact column names without regex.
 
 ### snake_case → camelCase at the boundary
 
-Postgres columns are `snake_case`. TypeScript convention is `camelCase`. We transform at two boundaries:
+Postgres columns are `snake_case`. TypeScript convention is
+`camelCase`. We transform at two boundaries:
 
-**Row types** use `Schema.fromKey` to map at decode time:
+**Row types** use `Schema.fromKey`:
 ```ts
-createdAt: Schema.propertySignature(Schema.DateFromString).pipe(Schema.fromKey("created_at"))
+createdAt: Schema.propertySignature(Schema.DateFromString)
+  .pipe(Schema.fromKey("created_at"))
 ```
 
-**Param names** are camelCased in the function signature and template interpolation:
+**Param names** are camelCased in the function signature:
 ```ts
 params: { readonly shareWith: string | null }
-// SQL template uses ${params.shareWith} which maps to the $N placeholder
 ```
 
-The SQL itself always keeps the original column names. Only the TypeScript-facing API is camelCase.
+The SQL itself always keeps the original column names.
+
+---
+
+## Nullability: the hardest problem in SQL codegen
+
+"Can this column be null?" sounds simple. The answer depends on
+table constraints, join types, function behavior, expression
+semantics, WHERE clauses, CTE boundaries, and runtime parameter
+values. No existing tool — Squirrel, sqlc, pgtyped, Prisma,
+Kysely — handles all of these.
+
+We went through seven iterations to get here.
+
+### Iteration 1: pg_attribute only
+
+Check `pg_attribute.attnotnull` for each result column. Works
+for simple `SELECT col FROM table` queries. Breaks immediately
+on outer joins — a `NOT NULL` column becomes nullable when
+it's on the right side of a `LEFT JOIN`.
+
+### Iteration 2: regex on SQL
+
+Parse the SQL with regex to find `LEFT JOIN`, `RIGHT JOIN`,
+`FULL JOIN`. Broke on schema-qualified names (`public.orders`),
+subqueries, CTEs, and comments containing `LEFT JOIN`.
+
+### Iteration 3: EXPLAIN with NULL params
+
+Use `PREPARE` + `EXPLAIN EXECUTE` with NULL arguments. The
+plan collapsed — `WHERE id = NULL` is always false, so Postgres
+optimized away all join nodes. No join info to read.
+
+### Iteration 4: EXPLAIN with dummy typed values
+
+Replace NULLs with typed dummy values (`0` for int, `''` for
+text). Postgres optimized `LEFT JOIN` → `INNER JOIN` when the
+WHERE clause filtered on the nullable side. Wrong plan, wrong
+nullability.
+
+### Iteration 5: EXPLAIN GENERIC_PLAN
+
+Postgres 16+ option. Gives the plan without knowing parameter
+values. No collapse, no optimization artifacts. Same approach
+Squirrel uses. Walk the plan tree, collect aliases from the
+nullable side of each join. This solved join nullability
+correctly for all cases — schema-qualified names, subqueries,
+CTEs, LATERAL, nested parens, same table with different aliases.
+
+### Iteration 6: regex on EXPLAIN Output strings
+
+For expression columns (`tableOID = 0`), matched patterns like
+`max(`, `->>`, `NULLIF` in the plan's Output entries. Worked
+but fragile — same problem as iteration 2, just one level up.
+If Postgres changes the EXPLAIN Output format, our regex breaks.
+
+### Iteration 7: libpg-query AST
+
+Postgres's own C parser compiled to WASM. Parses SQL into typed
+AST nodes. `FuncCall`, `CaseExpr`, `SubLink`, `A_Expr` — we
+check node types, not strings. Can't be wrong about what the
+SQL means because the parser IS Postgres.
+
+This was the foundation that made iterations 8 and 9 possible.
+
+### Iteration 8: pg_proc.proisstrict
+
+The biggest breakthrough. Researched how PostgreSQL's own
+planner handles nullability internally. The planner doesn't
+use hardcoded function lists — it checks `pg_proc.proisstrict`
+for every function and operator.
+
+`proisstrict = true` means "this function returns NULL if ANY
+argument is NULL." Enforced at the executor level, not by
+function authors. The guarantee is ironclad. About 60-65% of
+PostgreSQL's ~3,200 built-in functions are strict — covering
+all arithmetic operators, all string functions, all comparison
+operators, and most type casts.
+
+Before: hardcoded list of nullable aggregates. No way to handle
+`upper(nullable_col)` or `age + 1`.
+
+After: one `pg_proc` query per SQL file. Every function — built-in,
+extension, or user-defined — is covered. The AST gives us what
+functions are called and what their arguments are. `pg_proc`
+tells us how they propagate null. No lists to maintain.
+
+This also fixed `coalesce(nullable, nullable)`: the AST
+recursively checks if ALL coalesce arguments are nullable,
+and only then marks the result as nullable.
+
+### Iteration 9: WHERE clause null-rejection
+
+The NULL-substitution technique from StarRocks / PostgreSQL's
+`find_nonnullable_vars`. For each nullable column, substitute
+NULL into the WHERE predicate. If the predicate becomes FALSE
+or NULL → row filtered → column is non-null in results.
+
+This handles any strict predicate automatically:
+- `WHERE bio IS NOT NULL` → obvious
+- `WHERE bio = $1` → `=` is strict, `NULL = x` → NULL → filtered
+- `WHERE length(bio) > 0` → `length` is strict
+- AND: any conjunct rejects → column non-null
+- OR: ALL disjuncts must reject → column non-null
+
+Initially we decided NOT to implement this because of
+inconsistent UX (sometimes narrows, sometimes doesn't). But
+after implementing `pg_proc.proisstrict`, the inconsistency
+argument weakened — strict operators in WHERE clauses are
+detectable, and AND/OR rules are well-defined. We implemented
+it as a separate module (`where-nullability.ts`) that can be
+read, questioned, or removed independently.
+
+### The final stack
+
+Six layers, each backed by Postgres itself:
+
+```
+Layer 1: pg_attribute.attnotnull
+         Table column constraints.
+
+Layer 2: EXPLAIN GENERIC_PLAN
+         Outer join sides (alias-based plan tree walk).
+
+Layer 3: libpg-query AST + pg_proc.proisstrict
+         Expression structure + function null propagation.
+         Covers: aggregates, JSONB ops, CASE, NULLIF,
+         SubLink, TypeCast, strict function args, coalesce.
+
+Layer 4: pg_attribute by name
+         CTE/subquery columns that lost their tableOID.
+
+Layer 5: WHERE null-rejection
+         NULL-substitution on WHERE predicates.
+
+Layer 6: ?/! column alias suffixes
+         User override. Always has final say.
+```
+
+### Known limitations (tested, documented)
+
+Three cases where the tool gets it wrong, each with a
+`limitation_*.sql` fixture and a test asserting the current
+(wrong) behavior:
+
+1. **Non-strict custom function** — tool says not-nullable,
+   function might return null. Can't know without running it.
+
+2. **Strict function returning null on non-null input** —
+   `proisstrict` guarantees null-in→null-out, but a function
+   could also return null for other reasons. Rare.
+
+3. **WHERE in nested CTE** — outer query doesn't see inner
+   WHERE narrowing. CTE columns have `tableOID = 0`, so
+   Layer 4 (name lookup) says nullable based on the source
+   table, ignoring the CTE's own WHERE clause.
+
+Each test has a comment explaining what's actually correct
+and how to override with `?`/`!`. If we fix any of these,
+the test fails — telling us to flip the assertion.
+
+### How we compare to other tools
+
+| Feature | Squirrel | sqlc | pgtyped | sqlove |
+|---|---|---|---|---|
+| Table NOT NULL | ✅ | ✅ | ✅ | ✅ |
+| Outer join | ✅ | partial | ❌ | ✅ |
+| Function propagation | ❌ | ❌ | ❌ | ✅ pg_proc |
+| Expression nullability | ❌ | ❌ | ❌ | ✅ AST |
+| Aggregate nullability | ❌ | partial | ❌ | ✅ |
+| JSONB operators | ❌ | ❌ | ❌ | ✅ |
+| COALESCE analysis | ❌ | buggy | ❌ | ✅ |
+| CTE passthrough | ❌ | ❌ | ❌ | ✅ |
+| WHERE narrowing | ❌ | ❌ | ❌ | ✅ |
+| User override | ❌ | partial | ✅ !/?| ✅ !/?|
 
 ---
 
@@ -84,7 +284,7 @@ The SQL itself always keeps the original column names. Only the TypeScript-facin
 
 ### `null` vs `undefined` vs `optional` for nullable params
 
-This is genuinely hard in TypeScript. Current state: nullable INSERT/SET params are `string | null`.
+Current state: nullable INSERT/SET params are `string | null`.
 
 ```ts
 createTodo({ title: "x", description: null, shareWith: null })
@@ -92,208 +292,90 @@ createTodo({ title: "x", description: null, shareWith: null })
 
 You must pass every field. Explicit but verbose.
 
-Alternative: `shareWith?: string | null` — optional property, omit means null.
+Alternative: `shareWith?: string | null` — optional property.
+Cleaner DX. But `undefined` flows into SQL params. Postgres
+receives `NULL` either way. The question is whether the type
+system should distinguish "not provided" from "explicitly null."
 
-```ts
-createTodo({ title: "x" })  // shareWith omitted = NULL in Postgres
-```
-
-Cleaner DX. But now `undefined` flows into your SQL params. Does `@effect/sql` handle that correctly? Probably. But it's a runtime assumption hiding behind a type-level convenience.
-
-The deeper question: what does Postgres receive? It receives `NULL`. Not `undefined`, not "missing". `NULL`. So `null` is the honest representation.
-
-We went back and forth on this. Currently keeping `| null` (explicit). The `?:` optional approach might be better DX but we want to think about it more before committing.
-
-**What would Evan (Elm) do?** Elm has no null or undefined. It has `Maybe a = Just a | Nothing`. The Effect equivalent is `Option<T>`. But `Option` for every nullable SQL param feels heavy. And it doesn't match what Postgres actually does.
+Currently keeping `| null` (explicit). Revisit if users complain.
 
 ### Column nullability for params
 
-Postgres tells us column nullability (via `pg_attribute`). But it does NOT tell us parameter nullability. When you write `$1` going into a nullable `text` column, Postgres says "this parameter is `text`" — not "this parameter could be null."
+Postgres does NOT expose parameter nullability. When you write
+`$1` going into a nullable column, Postgres says the parameter
+is `text` — not "this parameter could be null."
 
-This is the same limitation Squirrel has. From their README:
-> Postgres doesn't expose any data about the nullability of query parameters
-
-Our workaround: we detect if a `$N` appears in an INSERT VALUES or SET assignment, find the target column, check if that column is nullable. If yes, the param gets `| null`.
-
-This works for INSERT/UPDATE SET. It doesn't work for WHERE clauses — and that's correct. `WHERE email = $1` should require a value. You're filtering, you need something to filter by.
-
-Edge cases we don't handle:
-- `INSERT ... ON CONFLICT DO UPDATE SET` — the SET params might be nullable
-- Subqueries — param used in a subquery's INSERT
-- `COALESCE($1, default)` — param is intentionally nullable but we can't detect it
-
-For these, you can always cast: `$1::text` or handle nullability in application code.
+Our workaround: detect INSERT/SET params, find the target
+column, check if it's nullable. Works for simple INSERT/UPDATE.
+Doesn't work for `COALESCE($1, default)` or subquery params.
 
 ### Should generated code be committed?
 
-Yes. Same as Squirrel. The generated `sql.ts` files are committed to version control. `sqlove check` in CI verifies they match the database.
-
-Why not `.gitignore` them and generate in CI? Because:
-1. Code review — you see what changed when a migration alters types
-2. No build step needed to get type checking in your editor
-3. Diffs show exactly what a schema change affects
-
-### One query per file — is that too granular?
-
-Squirrel enforces this. We follow it. The argument: each file is a single responsibility. The filename IS the function name. There's no ambiguity about what goes where.
-
-The counterargument: 50 queries = 50 files. That's a lot of files.
-
-In practice, it's fine. They're tiny files (2-10 lines each). Your IDE handles it. And when you need to find the query for "list todos by priority", you look for `list_by_priority.sql`. No searching through a 500-line file.
+Yes. Same as Squirrel. `sqlove check` in CI verifies they match.
+Code review shows what changed. No build step for editor types.
 
 ### Effect in generated code — is it too opinionated?
 
-sqlove generates code that depends on Effect, @effect/sql, and Schema. That's a hard dependency on a specific ecosystem.
+Hard dependency on Effect + @effect/sql + Schema. Only useful
+if you're already using Effect. If there's demand, a
+`--target plain` flag that generates `async/await` with `pg`
+directly would make sqlove universal.
 
-Alternative: generate plain `pg` code (what we built first, actually). Simpler, works everywhere, no ecosystem lock-in.
+### The `ManagedRuntime` bridge in Hono handlers
 
-We chose Effect because:
-- `SqlClient` as a service in context = no passing `db` around
-- `Schema.Class` = runtime validation + static types in one declaration
-- `Effect.gen` + `yield*` = composable queries without try/catch
-- Error channel = typed errors, no thrown exceptions
-
-But this means sqlove is only useful if you're already using Effect. That's a real trade-off. If there's demand, we could add a `--target plain` flag that generates simple `async/await` code with `pg` directly.
-
-### The `ManagedRuntime` bridge in Hono handlers — and the `runSql` mistake
-
-Our first attempt at bridging Effect with Hono was a `runSql` wrapper:
-
-```ts
-import { Effect, Layer, Redacted } from "effect"
-import { PgClient } from "@effect/sql-pg"
-import { SqlClient } from "@effect/sql/SqlClient"
-import type { SqlError } from "@effect/sql/SqlError"
-
-const DbLayer = PgClient.layer({
-  url: Redacted.make(process.env.DATABASE_URL!),
-})
-
-function runSql<A>(effect: Effect.Effect<A, SqlError, SqlClient>): Promise<A> {
-  return Effect.runPromise(Effect.provide(effect, DbLayer))
-}
-
-// Every handler:
-app.get("/todos", async (c) => {
-  const rows = await runSql(listTodos)
-  return c.json(rows)
-})
-```
-
-This worked but it was ugly. You had to import 6 things (`Effect`, `Layer`, `Redacted`, `PgClient`, `SqlClient`, `SqlError`) just to set up one wrapper function. The `runSql` name was meaningless — it's just "run this effect with the DB layer." And `Effect.provide(effect, DbLayer)` inside every call meant the layer was being evaluated per request.
-
-The fix was `ManagedRuntime`:
-
-```ts
-import { ManagedRuntime, Redacted } from "effect"
-import { PgClient } from "@effect/sql-pg"
-
-const runtime = ManagedRuntime.make(
-  PgClient.layer({ url: Redacted.make(process.env.DATABASE_URL!) })
-)
-
-app.get("/todos", async (c) =>
-  c.json(await runtime.runPromise(listTodos))
-)
-```
-
-Three imports instead of six. The runtime is built once with the layer baked in. Each handler is one line — `runtime.runPromise(effect)`. No wrapper function, no re-providing the layer. The bridge is still there (Effect → Promise) but it's minimal and obvious.
-
-In a fully Effect-based server (e.g., @effect/platform HTTP), this bridge wouldn't exist at all. You'd compose Effects all the way up. We accept the bridge because Hono is a real-world framework people use.
-
----
-
-### Nullability is harder than it looks
-
-"Can this column be null?" sounds simple. The answer depends on:
-
-- **Table constraints** — `NOT NULL` in `pg_attribute`. Easy.
-- **Join type** — LEFT/RIGHT/FULL makes the other side nullable. We use `EXPLAIN (GENERIC_PLAN)` to walk the plan tree and collect aliases from nullable sides. Same approach as Squirrel.
-- **Aggregates** — `max()` returns null on zero rows, `count()` never does, `coalesce()` removes null. We can't detect this — it requires understanding SQL function semantics.
-- **JSONB operators** — `->>'key'` returns null if key doesn't exist. Expression column, `tableOID = 0`, invisible to `pg_attribute`.
-- **CTE columns** — lose their table metadata. `tableOID = 0`.
-- **Runtime parameter values** — `WHERE ($1 IS NULL OR c.id = $1)` changes join behavior depending on the value. `GENERIC_PLAN` handles this correctly by not optimizing for specific values.
-
-We went through several iterations:
-
-1. **Regex on SQL** — broke on schema-qualified names (`public.orders`), subqueries, CTEs, and comments containing `LEFT JOIN`.
-2. **EXPLAIN with NULL params** — plan collapsed (`WHERE id = NULL` → always false, no join nodes).
-3. **EXPLAIN with dummy typed values** — Postgres optimized LEFT→INNER when filtering on nullable side.
-4. **EXPLAIN (GENERIC_PLAN)** — Postgres 16+ option. Gives the plan without knowing parameter values. No collapse, no optimization artifacts. Same approach Squirrel uses.
-5. **Regex on EXPLAIN Output strings** — detected `max(`, `->>`, `NULLIF`, etc. by pattern matching the plan's Output entries. Worked but fragile — same problem as #1, just one level up.
-6. **libpg-query AST** — Postgres's own C parser compiled to WASM. Parses SQL into typed AST nodes. `FuncCall`, `CaseExpr`, `SubLink`, `A_Expr` — we check node types, not strings. Can't be wrong about what the SQL means because the parser IS Postgres.
-
-The final stack:
-- **pg_attribute.attnotnull** for table column constraints
-- **EXPLAIN GENERIC_PLAN** for join nullability (alias-based plan tree walk)
-- **libpg-query AST + pg_proc.proisstrict** for expression nullability
-- **pg_attribute by name** for CTE/subquery column passthrough
-- **`?`/`!` suffixes** as user override escape hatch for anything we miss
-
-### The pg_proc.proisstrict discovery
-
-The biggest breakthrough came from researching how PostgreSQL's own planner handles nullability internally. The planner doesn't use hardcoded function lists — it checks `pg_proc.proisstrict` for every function and operator.
-
-`proisstrict = true` means "this function returns NULL if ANY argument is NULL." It's enforced at the executor level (`ExecInterpExpr`), not by function authors. The guarantee is ironclad. About 60-65% of PostgreSQL's ~3,200 built-in functions are strict — covering all arithmetic operators, all string functions (`upper`, `lower`, `trim`, etc.), all comparison operators, and most type casts.
-
-Before this discovery, we maintained a hardcoded list of nullable aggregates (`max`, `min`, `sum`, `avg`, `string_agg`, `array_agg`...) and had no way to handle `upper(nullable_col)` or `age + 1` where `age` is nullable. Adding every function by name was a losing game.
-
-After: one `pg_proc` query per SQL file, cached per session. Every function — built-in, extension, or user-defined — is covered. The AST gives us the expression structure (what functions are called, what their arguments are). `pg_proc.proisstrict` tells us how they propagate null. No lists to maintain.
-
-This also fixed `coalesce(nullable, nullable)`: the AST now recursively checks if ALL coalesce arguments are nullable (via `ColumnRef` → nullable source column lookup), and only then marks the result as nullable. Previously we assumed coalesce always removes null — wrong when all arguments can be null.
-
-The key insight from the research: PostgreSQL already contains a sound core for nullability inference. It's just not exposed through any SQL interface or protocol message. By querying `pg_proc`, `pg_attribute`, and the EXPLAIN plan, we reconstruct the same reasoning the planner does internally.
-
-### Iteration 7: what didn't work and why
-
-We also considered WHERE clause narrowing (`WHERE bio IS NOT NULL` → mark `bio` as non-null in results). The StarRocks approach (substitute NULL, constant-fold, check if FALSE) is clean and handles AND/OR correctly. But implementing it creates an inconsistent UX: sometimes the tool narrows, sometimes it doesn't (nested predicates, OR branches, subqueries). Users would have to know the detection rules to predict the output. We decided "always use `!` when you know better" is a simpler, more consistent contract than "the tool sometimes figures it out."
-
-`?` and `!` suffixes remain for: WHERE-based narrowing, custom functions whose behavior we can't catalog-check, and any edge case we haven't anticipated.
+Our first attempt was a `runSql` wrapper with 6 imports. The
+fix was `ManagedRuntime` — build the runtime once, each handler
+is `runtime.runPromise(effect)`. One line, three imports. In a
+fully Effect-based server, the bridge wouldn't exist at all.
 
 ### Snapshot tests need guardrails
 
-Snapshots capture regressions ("did the output change?") but not correctness ("is the output right?"). A wrong snapshot accepted once passes forever.
-
-We layer three kinds of tests:
-
-1. **Targeted assertions** (`complex-queries.test.ts`, `joins.test.ts`) — "this column IS nullable", "this param IS camelCase". Catches specific bugs.
-2. **Structural invariants** (`fixtures.test.ts`) — "every Schema.Class has a matching function", "no raw $N leaks into templates", "no ?/! suffixes in field names". Catches classes of bugs.
-3. **Snapshot** (`fixtures.test.ts`) — "nothing changed". Catches regressions.
-
-The invariant checks run alongside the snapshot. If someone accepts a wrong snapshot, the invariants catch it. If the invariants pass but the output is subtly wrong, the targeted assertions catch it.
+Snapshots capture regressions, not correctness. We layer three
+test types: targeted assertions (specific bugs), structural
+invariants (classes of bugs), and snapshot (regressions). The
+invariants catch bad snapshots.
 
 ---
 
 ## Things we explicitly chose NOT to do
 
-- **No config file.** Convention over configuration. `DATABASE_URL` and `sql/` directories. That's it.
-- **No query builder.** You write SQL. The tool doesn't help you write SQL.
-- **No migration tool.** Use whatever you want. sqlove only reads the database.
-- **No runtime dependency.** Generated code imports from `effect` and `@effect/sql`. sqlove itself is a devDependency.
-- **No watch mode (yet).** One-shot generate + `check` in CI. Watch mode is planned but not essential.
-- **No custom type overrides.** The OID → Schema mapping is fixed. If you need a custom mapping, that's a future feature.
+- **No config file.** `DATABASE_URL` and `sql/` directories.
+- **No query builder.** You write SQL.
+- **No migration tool.** Use whatever you want.
+- **No runtime dependency.** sqlove is a devDependency.
+- **No watch mode (yet).** One-shot + `check` in CI.
+- **No custom type overrides.** OID → Schema mapping is fixed.
 
 ---
 
 ## Performance
 
-Not a concern. The entire pipeline for 50 queries runs in ~40ms. Breakdown:
+The pipeline for 50 queries runs in ~40-70ms. Breakdown:
 
 ```
-parser:       0.7ms / 50 files     (pure string processing)
-codegen:      0.5ms / 50 queries   (pure string building)
-introspect:  41ms / 50 queries     (Postgres round-trips — the bottleneck)
-discovery:   18ms / 50 files       (filesystem walk)
+parser:       <1ms / 50 files    (pure string processing)
+codegen:      <1ms / 50 queries  (pure string building)
+introspect:  40-60ms / 50 queries (Postgres round-trips)
+discovery:   10-30ms / 50 files   (filesystem walk)
 ```
 
-The bottleneck is network I/O to Postgres. There's nothing to optimize in the tool itself. It's faster than a single React component render.
+Bottleneck is network I/O to Postgres. `libpg-query` WASM
+loads once (~1ms) and parses each SQL file in microseconds.
 
 ---
 
 ## Lineage
 
-Direct port of ideas from [Squirrel](https://github.com/giacomocavalieri/squirrel) by Giacomo Cavalieri. The philosophy is identical:
+Direct port of ideas from
+[Squirrel](https://github.com/giacomocavalieri/squirrel)
+by Giacomo Cavalieri:
 
-> Instead of trying to hide SQL, embrace it and leave you in control.
+> Instead of trying to hide SQL, embrace it and leave you
+> in control.
 
-Squirrel does this for Gleam + pog. sqlove does this for TypeScript + Effect + @effect/sql. Same conventions (sql/ directories, one query per file, generated sibling module), same approach (protocol-level introspection, no execution), same opinion (the database is the source of truth).
+Same conventions (sql/ directories, one query per file,
+generated sibling module), same approach (protocol-level
+introspection, no execution), same opinion (the database
+is the source of truth). We diverged on nullability inference
+— adding AST analysis, `pg_proc.proisstrict`, and WHERE
+narrowing — but the philosophy is identical.
