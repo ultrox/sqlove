@@ -226,46 +226,46 @@ Columns with `NOT NULL` in `pg_attribute` are non-nullable. Columns without it a
 ### Layer 4: CTE / subquery passthrough
 Columns from CTEs and subqueries lose their `tableOID`. For these, we check `pg_attribute` by column name — if any table in the database has that column as nullable, we mark it nullable.
 
-### Layer 5: Manual override — `?` and `!`
+### Layer 5: WHERE clause narrowing
 
-For edge cases the tool can't detect, add `?` or `!` to the column alias:
+The NULL-substitution technique (from StarRocks / PostgreSQL's own planner):
+substitute NULL for a column in the WHERE predicate. If the predicate
+becomes FALSE or NULL → row would be filtered → column is non-null in results.
 
 ```sql
--- Force nullable
-SELECT custom_function(x) AS "result?" FROM t
+-- All of these make bio non-null in results:
+WHERE bio IS NOT NULL              -- direct null test
+WHERE bio = $1                     -- = is strict, NULL = x → NULL → filtered
+WHERE length(bio) > 0              -- length is strict, length(NULL) → NULL
+WHERE bio IS NOT NULL AND age > 18 -- AND: any arm rejects nulls
+```
 
--- Force non-null (you know it's always set)
-SELECT bio AS "bio!" FROM users WHERE active = true
+```sql
+-- This does NOT make bio non-null:
+WHERE bio IS NOT NULL OR age > 18  -- OR: other branch can match null-bio rows
+```
+
+### Layer 6: Manual override — `?` and `!`
+
+For the rare edge cases the tool can't detect:
+
+```sql
+-- Force nullable: custom function that might return null
+SELECT my_custom_func(name) AS "result?" FROM users
+
+-- Force non-null: you know something the tool can't prove
+SELECT bio AS "bio!" FROM users WHERE some_complex_condition
 ```
 
 The suffix is stripped from the generated field name. Postgres never sees it.
 
-### When to use overrides
-
-The tool can be wrong in both directions. Use `!` and `?` to correct it:
-
-**False positive — tool says nullable, you know it's not:**
-```sql
--- bio is nullable in the table, but WHERE filters nulls out.
--- Tool checks pg_attribute, sees nullable. Wrong for this query.
-SELECT id, bio AS "bio!" FROM users WHERE bio IS NOT NULL
-```
-
-**False negative — tool says not nullable, but it can be null:**
-```sql
--- Custom function that can return null for non-null inputs.
--- pg_proc.proisstrict says "strict" but the function might
--- still return null based on internal logic. Rare.
-SELECT id, my_custom_func(name) AS "result?" FROM users
-```
-
 ### Known limitations
 
-| Pattern | What the tool does | Reality |
+| Pattern | What the tool does | Why |
 |---|---|---|
-| `WHERE col IS NOT NULL` | Says nullable (from schema) | Not nullable (WHERE filters) |
-| Non-strict custom function returning null | Says not nullable | Depends on function logic |
-| Strict function returning null on non-null input | Says not nullable | Rare but possible |
+| Non-strict custom function returning null | Says not nullable | Can't know function behavior |
+| Strict function returning null on non-null input | Says not nullable | Rare — proisstrict only guarantees null-in→null-out |
+| WHERE in nested CTE/view | Not analyzed | Only top-level WHERE is checked |
 
 ---
 
