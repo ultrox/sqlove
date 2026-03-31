@@ -95,14 +95,10 @@ function emitRowClass(
   typeName: string,
 ): string {
   const fields = query.columns.map((col) => {
-    const camel = snakeToCamel(col.name);
-    const baseSchema = col.nullable
+    const schema = col.nullable
       ? `Schema.NullOr(${col.tsType.schema})`
       : col.tsType.schema;
-    if (camel !== col.name) {
-      return `  ${camel}: Schema.propertySignature(${baseSchema}).pipe(Schema.fromKey("${col.name}")),`;
-    }
-    return `  ${camel}: ${baseSchema},`;
+    return `  ${col.name}: ${schema},`;
   });
 
   const displayPath = `${query.file.modulePath}/sql/${query.file.queryName}.sql`;
@@ -180,7 +176,7 @@ function emitParamQuery(
       const type = p.nullable
         ? `${p.tsType.tsAnnotation} | null`
         : p.tsType.tsAnnotation;
-      return `    readonly ${snakeToCamel(p.name)}: ${type}`;
+      return `    readonly ${p.name}: ${type}`;
     })
     .join(";\n");
 
@@ -218,7 +214,7 @@ function emitMutationFunction(
       const type = p.nullable
         ? `${p.tsType.tsAnnotation} | null`
         : p.tsType.tsAnnotation;
-      return `    readonly ${snakeToCamel(p.name)}: ${type}`;
+      return `    readonly ${p.name}: ${type}`;
     })
     .join(";\n");
 
@@ -252,7 +248,7 @@ function sqlToTemplate(
   for (const p of sorted) {
     result = result.replace(
       new RegExp(`\\$${p.index}(?!\\d)`, "g"),
-      "${params." + snakeToCamel(p.name) + "}",
+      "${params." + p.name + "}",
     );
   }
 

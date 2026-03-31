@@ -261,8 +261,8 @@ describe("codegen", () => {
     });
   });
 
-  describe("param names are camelCase", () => {
-    it("converts snake_case param names to camelCase", () => {
+  describe("param names match SQL context (snake_case)", () => {
+    it("keeps snake_case param names", () => {
       const src = gen([query({
         name: "create_thing",
         sql: "INSERT INTO t (share_with, created_by) VALUES ($1, $2) RETURNING id",
@@ -272,14 +272,11 @@ describe("codegen", () => {
         ],
         columns: [{ name: "id", oid: 23, tsType: NUM, nullable: false }],
       })]);
-      expect(src).toContain("readonly shareWith: string");
-      expect(src).toContain("readonly createdBy: string");
-      // SQL column names stay snake_case, only param keys are camelCase
-      expect(src).not.toContain("readonly share_with");
-      expect(src).not.toContain("readonly created_by");
+      expect(src).toContain("readonly share_with: string");
+      expect(src).toContain("readonly created_by: string");
     });
 
-    it("uses camelCase param names in SQL template interpolation", () => {
+    it("uses snake_case param names in SQL template interpolation", () => {
       const src = gen([query({
         name: "update_thing",
         sql: "UPDATE t SET share_with = $1 WHERE id = $2",
@@ -289,7 +286,7 @@ describe("codegen", () => {
         ],
         isMutation: true,
       })]);
-      expect(src).toContain("${params.shareWith}");
+      expect(src).toContain("${params.share_with}");
       expect(src).toContain("${params.id}");
     });
 
@@ -320,7 +317,7 @@ describe("codegen", () => {
       expect(src).toContain("id: Schema.Number");
       expect(src).toContain("name: Schema.String");
       expect(src).toContain("active: Schema.Boolean");
-      expect(src).toContain(`createdAt: Schema.propertySignature(Schema.DateFromString).pipe(Schema.fromKey("created_at"))`);
+      expect(src).toContain("created_at: Schema.DateFromString");
     });
   });
 });

@@ -103,7 +103,7 @@ describe("fixtures", () => {
 
   it("override files: ? columns are nullable, ! columns are not", () => {
     // override_force_nullable has last_order_at — must be NullOr
-    expect(generated).toMatch(/lastOrderAt.*NullOr/);
+    expect(generated).toMatch(/last_order_at.*NullOr/);
     // override_force_not_null has bio — must NOT be NullOr
     expect(generated).toMatch(/export class OverrideForceNotNullRow[\s\S]*?bio:\s*Schema\.String/);
   });

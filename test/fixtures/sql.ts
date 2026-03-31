@@ -65,8 +65,8 @@ export class CategoryTreeRow extends Schema.Class<CategoryTreeRow>("CategoryTree
   id: Schema.NullOr(Schema.Number),
   name: Schema.NullOr(Schema.String),
   depth: Schema.Number,
-  parentId: Schema.propertySignature(Schema.NullOr(Schema.Number)).pipe(Schema.fromKey("parent_id")),
-  productCount: Schema.propertySignature(Schema.Number).pipe(Schema.fromKey("product_count")),
+  parent_id: Schema.NullOr(Schema.Number),
+  product_count: Schema.Number,
 }) {}
 
 /**
@@ -106,7 +106,7 @@ ORDER BY ct.depth, ct.name`
 export class CteRankedRow extends Schema.Class<CteRankedRow>("CteRankedRow")({
   name: Schema.String,
   email: Schema.String,
-  totalSpent: Schema.propertySignature(Schema.String).pipe(Schema.fromKey("total_spent")),
+  total_spent: Schema.String,
   rank: Schema.Number,
 }) {}
 
@@ -169,7 +169,7 @@ export const enumColumn = (
  *  @see `/sql/expr_case_null.sql` */
 export class ExprCaseNullRow extends Schema.Class<ExprCaseNullRow>("ExprCaseNullRow")({
   id: Schema.Number,
-  maybeName: Schema.propertySignature(Schema.NullOr(Schema.String)).pipe(Schema.fromKey("maybe_name")),
+  maybe_name: Schema.NullOr(Schema.String),
 }) {}
 
 /**
@@ -193,7 +193,7 @@ WHERE id = ${params.id}`
  *  @see `/sql/expr_nullif.sql` */
 export class ExprNullifRow extends Schema.Class<ExprNullifRow>("ExprNullifRow")({
   id: Schema.Number,
-  nameOrNull: Schema.propertySignature(Schema.NullOr(Schema.String)).pipe(Schema.fromKey("name_or_null")),
+  name_or_null: Schema.NullOr(Schema.String),
 }) {}
 
 /**
@@ -215,7 +215,7 @@ WHERE id = ${params.id}`
  *  @see `/sql/expr_scalar_subquery.sql` */
 export class ExprScalarSubqueryRow extends Schema.Class<ExprScalarSubqueryRow>("ExprScalarSubqueryRow")({
   name: Schema.String,
-  managerEmail: Schema.propertySignature(Schema.NullOr(Schema.String)).pipe(Schema.fromKey("manager_email")),
+  manager_email: Schema.NullOr(Schema.String),
 }) {}
 
 /**
@@ -239,7 +239,7 @@ WHERE u.id = ${params.id}`
  *  @see `/sql/expr_string_agg.sql` */
 export class ExprStringAggRow extends Schema.Class<ExprStringAggRow>("ExprStringAggRow")({
   id: Schema.Number,
-  allNotes: Schema.propertySignature(Schema.NullOr(Schema.String)).pipe(Schema.fromKey("all_notes")),
+  all_notes: Schema.NullOr(Schema.String),
   totals: Schema.NullOr(Schema.Array(Schema.String)),
 }) {}
 
@@ -265,8 +265,8 @@ GROUP BY u.id`
  *  @see `/sql/expr_window_lag.sql` */
 export class ExprWindowLagRow extends Schema.Class<ExprWindowLagRow>("ExprWindowLagRow")({
   name: Schema.String,
-  prevName: Schema.propertySignature(Schema.NullOr(Schema.String)).pipe(Schema.fromKey("prev_name")),
-  nextName: Schema.propertySignature(Schema.NullOr(Schema.String)).pipe(Schema.fromKey("next_name")),
+  prev_name: Schema.NullOr(Schema.String),
+  next_name: Schema.NullOr(Schema.String),
 }) {}
 
 /**
@@ -354,7 +354,7 @@ RETURNING id`
 export class InsertReturningRow extends Schema.Class<InsertReturningRow>("InsertReturningRow")({
   id: Schema.Number,
   name: Schema.String,
-  createdAt: Schema.propertySignature(Schema.DateFromString).pipe(Schema.fromKey("created_at")),
+  created_at: Schema.DateFromString,
 }) {}
 
 /**
@@ -541,7 +541,7 @@ LEFT JOIN (orders o JOIN line_items li ON li.order_id = o.id)
  *  @see `/sql/join_same_table_twice.sql` */
 export class JoinSameTableTwiceRow extends Schema.Class<JoinSameTableTwiceRow>("JoinSameTableTwiceRow")({
   name: Schema.String,
-  managerName: Schema.propertySignature(Schema.NullOr(Schema.String)).pipe(Schema.fromKey("manager_name")),
+  manager_name: Schema.NullOr(Schema.String),
   total: Schema.String,
 }) {}
 
@@ -663,7 +663,7 @@ WHERE metadata @> ${params.metadata}::jsonb`
  *  @see `/sql/lateral_recent_orders.sql` */
 export class LateralRecentOrdersRow extends Schema.Class<LateralRecentOrdersRow>("LateralRecentOrdersRow")({
   name: Schema.String,
-  orderId: Schema.propertySignature(Schema.NullOr(Schema.Number)).pipe(Schema.fromKey("order_id")),
+  order_id: Schema.NullOr(Schema.Number),
   total: Schema.NullOr(Schema.String),
   status: Schema.NullOr(OrderStatus),
 }) {}
@@ -767,7 +767,7 @@ SELECT id, bio FROM filtered WHERE id = ${params.id}`
  *  @see `/sql/limitation_non_strict_func.sql` */
 export class LimitationNonStrictFuncRow extends Schema.Class<LimitationNonStrictFuncRow>("LimitationNonStrictFuncRow")({
   id: Schema.Number,
-  fullText: Schema.propertySignature(Schema.String).pipe(Schema.fromKey("full_text")),
+  full_text: Schema.String,
 }) {}
 
 /**
@@ -817,7 +817,7 @@ export const limitationStrictReturnsNull = (
 export class MultiEnumRow extends Schema.Class<MultiEnumRow>("MultiEnumRow")({
   name: Schema.String,
   role: UserRole,
-  orderId: Schema.propertySignature(Schema.Number).pipe(Schema.fromKey("order_id")),
+  order_id: Schema.Number,
   status: OrderStatus,
 }) {}
 
@@ -867,15 +867,15 @@ export const nullableColumns = (
 /** Rows returned by {@link orderDetails}.
  *  @see `/sql/order_details.sql` */
 export class OrderDetailsRow extends Schema.Class<OrderDetailsRow>("OrderDetailsRow")({
-  orderId: Schema.propertySignature(Schema.Number).pipe(Schema.fromKey("order_id")),
+  order_id: Schema.Number,
   status: OrderStatus,
   customer: Schema.String,
   product: Schema.String,
   quantity: Schema.Number,
-  unitPrice: Schema.propertySignature(Schema.String).pipe(Schema.fromKey("unit_price")),
-  lineTotal: Schema.propertySignature(Schema.String).pipe(Schema.fromKey("line_total")),
-  paymentMethod: Schema.propertySignature(Schema.NullOr(Schema.String)).pipe(Schema.fromKey("payment_method")),
-  paidAt: Schema.propertySignature(Schema.NullOr(Schema.DateFromString)).pipe(Schema.fromKey("paid_at")),
+  unit_price: Schema.String,
+  line_total: Schema.String,
+  payment_method: Schema.NullOr(Schema.String),
+  paid_at: Schema.NullOr(Schema.DateFromString),
 }) {}
 
 /**
@@ -910,7 +910,7 @@ WHERE o.id = ${params.id}`
  *  @see `/sql/override_aggregate_nullable.sql` */
 export class OverrideAggregateNullableRow extends Schema.Class<OverrideAggregateNullableRow>("OverrideAggregateNullableRow")({
   name: Schema.String,
-  lastOrder: Schema.propertySignature(Schema.NullOr(Schema.DateFromString)).pipe(Schema.fromKey("last_order")),
+  last_order: Schema.NullOr(Schema.DateFromString),
 }) {}
 
 /**
@@ -956,7 +956,7 @@ WHERE u.id = ${params.id}`
  *  @see `/sql/override_cte_nullable.sql` */
 export class OverrideCteNullableRow extends Schema.Class<OverrideCteNullableRow>("OverrideCteNullableRow")({
   id: Schema.Number,
-  parentId: Schema.propertySignature(Schema.NullOr(Schema.Number)).pipe(Schema.fromKey("parent_id")),
+  parent_id: Schema.NullOr(Schema.Number),
 }) {}
 
 /**
@@ -1000,7 +1000,7 @@ WHERE id = ${params.id}`
  *  @see `/sql/override_force_nullable.sql` */
 export class OverrideForceNullableRow extends Schema.Class<OverrideForceNullableRow>("OverrideForceNullableRow")({
   name: Schema.String,
-  lastOrderAt: Schema.propertySignature(Schema.NullOr(Schema.DateFromString)).pipe(Schema.fromKey("last_order_at")),
+  last_order_at: Schema.NullOr(Schema.DateFromString),
 }) {}
 
 /**
@@ -1024,7 +1024,7 @@ GROUP BY u.id`
  *  @see `/sql/override_func_on_nullable.sql` */
 export class OverrideFuncOnNullableRow extends Schema.Class<OverrideFuncOnNullableRow>("OverrideFuncOnNullableRow")({
   id: Schema.Number,
-  displayBio: Schema.propertySignature(Schema.NullOr(Schema.String)).pipe(Schema.fromKey("display_bio")),
+  display_bio: Schema.NullOr(Schema.String),
 }) {}
 
 /**
@@ -1095,10 +1095,10 @@ export class ProductStatsRow extends Schema.Class<ProductStatsRow>("ProductStats
   id: Schema.Number,
   name: Schema.String,
   sku: Schema.String,
-  avgRating: Schema.propertySignature(Schema.String).pipe(Schema.fromKey("avg_rating")),
-  totalSold: Schema.propertySignature(Schema.Number).pipe(Schema.fromKey("total_sold")),
+  avg_rating: Schema.String,
+  total_sold: Schema.Number,
   revenue: Schema.String,
-  reviewCount: Schema.propertySignature(Schema.Number).pipe(Schema.fromKey("review_count")),
+  review_count: Schema.Number,
 }) {}
 
 /**
@@ -1128,14 +1128,14 @@ ORDER BY revenue DESC`
 /** Rows returned by {@link refundReport}.
  *  @see `/sql/refund_report.sql` */
 export class RefundReportRow extends Schema.Class<RefundReportRow>("RefundReportRow")({
-  refundId: Schema.propertySignature(Schema.Number).pipe(Schema.fromKey("refund_id")),
-  refundAmount: Schema.propertySignature(Schema.String).pipe(Schema.fromKey("refund_amount")),
+  refund_id: Schema.Number,
+  refund_amount: Schema.String,
   reason: Schema.NullOr(Schema.String),
-  refundedAt: Schema.propertySignature(Schema.DateFromString).pipe(Schema.fromKey("refunded_at")),
-  orderId: Schema.propertySignature(Schema.Number).pipe(Schema.fromKey("order_id")),
-  orderStatus: Schema.propertySignature(OrderStatus).pipe(Schema.fromKey("order_status")),
+  refunded_at: Schema.DateFromString,
+  order_id: Schema.Number,
+  order_status: OrderStatus,
   customer: Schema.String,
-  paymentMethod: Schema.propertySignature(Schema.String).pipe(Schema.fromKey("payment_method")),
+  payment_method: Schema.String,
 }) {}
 
 /**
@@ -1144,8 +1144,8 @@ export class RefundReportRow extends Schema.Class<RefundReportRow>("RefundReport
  */
 export const refundReport = (
   params: {
-    readonly refundedAt: Date;
-    readonly refundedAt: Date;
+    readonly refunded_at: Date;
+    readonly refunded_at: Date;
   }
 ): Effect.Effect<ReadonlyArray<RefundReportRow>, SqlError, SqlClient> =>
   SqlClient.pipe(Effect.flatMap((sql) =>
@@ -1162,7 +1162,7 @@ FROM refunds r
 JOIN payments p ON p.id = r.payment_id
 JOIN orders o ON o.id = r.order_id
 JOIN users u ON u.id = o.user_id
-WHERE r.refunded_at >= ${params.refundedAt} AND r.refunded_at < ${params.refundedAt}
+WHERE r.refunded_at >= ${params.refunded_at} AND r.refunded_at < ${params.refunded_at}
 ORDER BY r.refunded_at DESC`
   ));
 
@@ -1193,9 +1193,9 @@ export class SearchProductsRow extends Schema.Class<SearchProductsRow>("SearchPr
   id: Schema.Number,
   name: Schema.String,
   price: Schema.String,
-  inStock: Schema.propertySignature(Schema.Boolean).pipe(Schema.fromKey("in_stock")),
+  in_stock: Schema.Boolean,
   category: Schema.NullOr(Schema.String),
-  avgRating: Schema.propertySignature(Schema.String).pipe(Schema.fromKey("avg_rating")),
+  avg_rating: Schema.String,
 }) {}
 
 /**
@@ -1250,7 +1250,7 @@ export const simpleSelect: Effect.Effect<
 export class UpsertReviewRow extends Schema.Class<UpsertReviewRow>("UpsertReviewRow")({
   id: Schema.Number,
   rating: Schema.Number,
-  createdAt: Schema.propertySignature(Schema.DateFromString).pipe(Schema.fromKey("created_at")),
+  created_at: Schema.DateFromString,
 }) {}
 
 /**
@@ -1259,15 +1259,15 @@ export class UpsertReviewRow extends Schema.Class<UpsertReviewRow>("UpsertReview
  */
 export const upsertReview = (
   params: {
-    readonly userId: number;
-    readonly productId: number;
+    readonly user_id: number;
+    readonly product_id: number;
     readonly rating: number;
     readonly body: string | null;
   }
 ): Effect.Effect<ReadonlyArray<UpsertReviewRow>, SqlError, SqlClient> =>
   SqlClient.pipe(Effect.flatMap((sql) =>
     sql<UpsertReviewRow>`INSERT INTO reviews (user_id, product_id, rating, body)
-VALUES (${params.userId}, ${params.productId}, ${params.rating}, ${params.body})
+VALUES (${params.user_id}, ${params.product_id}, ${params.rating}, ${params.body})
 ON CONFLICT (user_id, product_id)
 DO UPDATE SET rating = ${params.rating}, body = ${params.body}
 RETURNING id, rating, created_at`
@@ -1281,9 +1281,9 @@ export class UserDashboardRow extends Schema.Class<UserDashboardRow>("UserDashbo
   email: Schema.String,
   role: UserRole,
   tags: Schema.Array(Schema.String),
-  orderCount: Schema.propertySignature(Schema.Number).pipe(Schema.fromKey("order_count")),
-  totalSpent: Schema.propertySignature(Schema.String).pipe(Schema.fromKey("total_spent")),
-  lastOrderAt: Schema.propertySignature(Schema.NullOr(Schema.DateFromString)).pipe(Schema.fromKey("last_order_at")),
+  order_count: Schema.Number,
+  total_spent: Schema.String,
+  last_order_at: Schema.NullOr(Schema.DateFromString),
 }) {}
 
 /**
@@ -1395,8 +1395,8 @@ export class WindowRunningTotalRow extends Schema.Class<WindowRunningTotalRow>("
   id: Schema.Number,
   name: Schema.String,
   total: Schema.String,
-  createdAt: Schema.propertySignature(Schema.DateFromString).pipe(Schema.fromKey("created_at")),
-  runningTotal: Schema.propertySignature(Schema.String).pipe(Schema.fromKey("running_total")),
+  created_at: Schema.DateFromString,
+  running_total: Schema.String,
 }) {}
 
 /**
