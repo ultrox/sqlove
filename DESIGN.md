@@ -203,23 +203,26 @@ A future improvement: use the AST for param naming too.
 The `ColumnRef` nodes in `WHERE`, `INSERT`, and `SET` clauses
 would give us exact column names without regex.
 
-### snake_case → camelCase at the boundary
+### No camelCase transform — types match wire data
 
-Postgres columns are `snake_case`. TypeScript convention is
-`camelCase`. We transform at two boundaries:
+We initially transformed column names from `snake_case` to
+`camelCase` using `Schema.fromKey`. This was wrong.
 
-**Row types** use `Schema.fromKey`:
-```ts
-createdAt: Schema.propertySignature(Schema.DateFromString)
-  .pipe(Schema.fromKey("created_at"))
-```
+The generated code uses `sql<Row>\`...\`` which is a **type
+assertion**, not a runtime decoder. `Schema.fromKey` only
+works when you pipe through `Schema.decode()`. Without that,
+the types said `createdAt` but the runtime data had
+`created_at`. A type-level lie.
 
-**Param names** are camelCased in the function signature:
-```ts
-params: { readonly shareWith: string | null }
-```
+Now: column names and param names match exactly what Postgres
+returns. If the column is `project_id`, the field is
+`project_id`. If the user aliases `AS "myField"` in SQL,
+the field is `myField`. No transformation. What you see in
+the SQL is what you get in TypeScript.
 
-The SQL itself always keeps the original column names.
+Function names are still camelCase (`find_user.sql` →
+`findUser`) because that's a TypeScript naming convention
+for identifiers, not data.
 
 ---
 
